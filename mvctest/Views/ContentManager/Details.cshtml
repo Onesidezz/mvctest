@@ -1,0 +1,57 @@
+﻿@model mvctest.Models.RecordViewModel
+
+@{
+    ViewData["Title"] = "Record Details";
+}
+
+<div class="container mt-5">
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <h4 class="mb-0">Record Details</h4>
+        </div>
+
+        <div class="card-body">
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">Record URI:</label>
+                <div class="col-sm-9">@Model.URI</div>
+            </div>
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">Title:</label>
+                <div class="col-sm-9">@Model.Title</div>
+            </div>
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">Container:</label>
+                <div class="col-sm-9">@Model.Container</div>
+            </div>
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">All Parts:</label>
+                <div class="col-sm-9">@Model.AllParts</div>
+            </div>
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">Assignee:</label>
+                <div class="col-sm-9">@Model.Assignee</div>
+            </div>
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">Date Created:</label>
+                <div class="col-sm-9">@Model.DateCreated</div>
+            </div>
+            <div class="row mb-3">
+                <label class="col-sm-3 fw-bold">Is Container:</label>
+                <div class="col-sm-9">@Model.IsContainer</div>
+            </div>
+            <div class="row mb-4">
+                <label class="col-sm-3 fw-bold">Download:</label>
+                <div class="col-sm-9">
+                    <a asp-action="Download" asp-controller="ContentManager" asp-route-id="@Model.URI" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-download"></i> Download File
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-footer text-end">
+            <a asp-action="Edit" asp-route-id="@Model.URI" class="btn btn-warning btn-sm me-2">Edit</a>
+            <a asp-action="Index" class="btn btn-secondary btn-sm">Back to List</a>
+        </div>
+    </div>
+</div>

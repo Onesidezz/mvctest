@@ -1,0 +1,92 @@
+﻿@{
+    ViewData["Title"] = "Home Page";
+    ViewData["Title"] = "Access Content Manager";
+    @if (ViewBag.ErrorMessage != null)
+    {
+        <div class="alert alert-danger mt-3">
+            @ViewBag.ErrorMessage
+        </div>
+    }
+}
+
+
+<div class="container mt-5">
+    <div class="row align-items-center">
+        <div class="col-md-6 text-center text-md-start">
+            <h1 class="display-4 fw-bold text-primary mb-3">Welcome to Content Manager</h1>
+            <p class="lead">
+                Efficiently manage, secure, and govern enterprise documents with ease. Integrated with Microsoft 365, SAP, and Salesforce.
+            </p>
+
+            <!-- Required Dataset Info Form -->
+            <form asp-action="AccessLog" asp-controller="Home" method="post" class="mt-4">
+                <div class="mb-3">
+                    <label for="DataSetId" class="form-label fw-bold">Dataset ID</label>
+                    <input type="text" name="DataSetId" id="DataSetId" class="form-control" placeholder="Enter Dataset ID" required />
+                </div>
+                <div class="mb-3">
+                    <label for="WorkGroupUrl" class="form-label fw-bold">Workgroup Server URL</label>
+                    <input type="text" name="WorkGroupUrl" id="WorkGroupUrl" class="form-control" placeholder="Enter Workgroup URL" required />
+                </div>
+                <button type="submit" class="btn btn-primary btn-lg me-2">Explore Records</button>
+                <a href="https://www.opentext.com/products/content-manager" target="_blank" class="btn btn-outline-secondary btn-lg">Learn More</a>
+            </form>
+        </div>
+
+        <div class="col-md-6 text-center">
+            <img src="https://play.vidyard.com/YbeyNxJidY56hwCwBooJhM.jpg" alt="Content Manager Dashboard" class="img-fluid rounded shadow" style="max-height: 400px;">
+        </div>
+    </div>
+</div>
+
+<hr class="my-5" />
+
+<div class="text-center">
+    <h3 class="fw-semibold mb-3">What can you do?</h3>
+    <div class="row">
+        <div class="col-md-4">
+            <h5 class="text-success">Manage Containers</h5>
+            <p class="small">Organize files in container-based structures, ensuring clarity and hierarchy.</p>
+        </div>
+        <div class="col-md-4">
+            <h5 class="text-success">Search & Filter</h5>
+            <p class="small">Quickly find records using smart search integrated with metadata and filters.</p>
+        </div>
+        <div class="col-md-4">
+            <h5 class="text-success">Download & Track</h5>
+            <p class="small">Download documents and view metadata such as creator, assignee, and creation date.</p>
+        </div>
+    </div>
+</div>
+
+<hr />
+
+@* Optional Search Section (Commented Out) *@
+@section Scripts {
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        /*
+        $('#searchBtn').click(function () {
+            var keyword = $('#searchBox').val();
+            $.ajax({
+                url: '/Home/Search',
+                type: 'GET',
+                data: { keyword: keyword },
+                success: function (data) {
+                    $('#resultsList').empty();
+                    if (data.length === 0) {
+                        $('#resultsList').append('<li class="list-group-item">No results found</li>');
+                    } else {
+                        data.forEach(function (item) {
+                            $('#resultsList').append('<li class="list-group-item">' + item.name + '</li>');
+                        });
+                    }
+                },
+                error: function () {
+                    alert('Error fetching data');
+                }
+            });
+        });
+        */
+    </script>
+}

@@ -1,0 +1,11 @@
+﻿@{
+    ViewData["Title"] = "Access Denied";
+}
+
+<div class="container mt-5">
+    <div class="alert alert-danger text-center shadow-sm p-4 rounded">
+        <h4 class="text-danger">Access Denied</h4>
+        <p>@ViewBag.ErrorMessage</p>
+        <a href="@Url.Action("Index", "Home")" class="btn btn-outline-primary mt-3">Go Back</a>
+    </div>
+</div>

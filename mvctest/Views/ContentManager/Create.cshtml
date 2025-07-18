@@ -1,0 +1,53 @@
+﻿@model mvctest.Models.CreateRecord
+
+@{
+    ViewData["Title"] = "Create New Record";
+}
+
+<!-- Optional Custom Styles -->
+<style>
+    .form-control {
+        padding: 0.45rem 0.75rem;
+        font-size: 0.95rem;
+    }
+</style>
+
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow rounded">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="bi bi-file-earmark-plus me-2"></i>
+                        Create New Record
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <form asp-action="Create" enctype="multipart/form-data" method="post">
+                        <div class="mb-3">
+                            <label asp-for="Title" class="form-label">Title</label>
+                            <input asp-for="Title" class="form-control" placeholder="Enter title" />
+                        </div>
+
+                      @*   <div class="mb-3">
+                            <label asp-for="Container" class="form-label">Container</label>
+                            <input asp-for="Container" class="form-control" placeholder="Enter container name" />
+                        </div> *@
+
+                        <div class="mb-3">
+                            <label asp-for="DateCreated" class="form-label">Date Created</label>
+                            <input asp-for="DateCreated" class="form-control" type="date" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Attach Document</label>
+                            <input asp-for="AttachDocumentpath" class="form-control" type="file" />
+                        </div>
+
+                        <button type="submit" class="btn btn-success">Create</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
