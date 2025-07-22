@@ -22,6 +22,7 @@ namespace mvctest.Services
         private readonly AppSettings _settings;
         private readonly HttpClient _httpClient;
         private readonly IContentManager _contentManager;
+        private readonly string Prompt = "Give me short Summary  for the following content what actually this content is about in 5 sentance :\n\n";
 
         public ChatMLService(IOptions<AppSettings> options, HttpClient httpClient, IContentManager contentManager)
         {
@@ -33,10 +34,6 @@ namespace mvctest.Services
                 using var stream = new FileStream(_settings.TrainedModelPath, FileMode.Open, FileAccess.Read, FileShare.Read);
                 var model = _mlContext.Model.Load(stream, out var schema);
                 _predictionEngine = _mlContext.Model.CreatePredictionEngine<ChatData, ChatPrediction>(model);
-            }
-            else
-            {
-                TrainModel();
             }
 
             _httpClient = httpClient;
@@ -65,12 +62,12 @@ namespace mvctest.Services
                         {
                             if (isFromGPT)
                             {
-                                var response = await GetChatGptResponseAsync(userMessage, record.ESource);
+                                var response = await GetChatGptResponseAsync(userMessage, record.ESource, Prompt);
                                 return response;
                             }
                             else if (isFromDeepseek)
                             {
-                                var summary = await DeepSeekSummarizeWithStreaming(record.ESource);
+                                var summary = await DeepSeekSummarizeWithStreaming(record.ESource, Prompt);
                                 return summary;
                             }
                             else
@@ -84,7 +81,16 @@ namespace mvctest.Services
                         }
                     }
                 }
-
+                if (isFromGPT)
+                {
+                    var response = await GetChatGptResponseAsync(userMessage);
+                    return response;
+                }
+                else if (isFromDeepseek)
+                {
+                    var summary = await DeepSeekSummarizeWithStreaming("","",userMessage);
+                    return summary;
+                }
                 // Fallback to ML.NET intent prediction
                 var input = new ChatData { Text = userMessage };
                 var prediction = _predictionEngine.Predict(input);
@@ -97,28 +103,7 @@ namespace mvctest.Services
         }
 
 
-
-        private bool IsChatGPTSummaryRequest(string message, out string recordName)
-        {
-            string[] triggers =
-            {
-                "Do you want a summary of this record? Please Enter Record Name :",
-                "Which record summary do you want to know? Please Enter Record Name :",
-                "Show me the record summary for Record Name :"
-            };
-            foreach (var trigger in triggers)
-            {
-                if (message.StartsWith(trigger, StringComparison.OrdinalIgnoreCase))
-                {
-                    recordName = message.Substring(trigger.Length).Trim();
-                    return true;
-                }
-            }
-            recordName = string.Empty;
-            return false;
-        }
-
-        public void TrainModel()
+        public async Task TrainModelAsync()
         {
             var stopwatch = Stopwatch.StartNew();
 
@@ -139,6 +124,7 @@ namespace mvctest.Services
             var model = intentPipeline.Fit(trainingData);
             _predictionEngine = _mlContext.Model.CreatePredictionEngine<ChatData, ChatPrediction>(model);
 
+            // Save the model
             using var fs = new FileStream(_settings.TrainedModelPath, FileMode.Create);
             _mlContext.Model.Save(model, trainingData.Schema, fs);
 
@@ -146,9 +132,9 @@ namespace mvctest.Services
             Console.WriteLine($"TrainModel executed in {stopwatch.Elapsed.TotalMinutes:F2} minutes");
         }
 
-        public async Task<string> GetChatGptResponseAsync(string userInput, string? filePath = null)
+
+        public async Task<string> GetChatGptResponseAsync(string userInput, string? filePath = null,string prompt = "")
         {
-            string fullMessage = "Give me short Summary  for the following content what actually this content is about in 5 sentance :\n\n";
 
             if (!string.IsNullOrEmpty(filePath))
             {
@@ -165,11 +151,11 @@ namespace mvctest.Services
                         fileContent = fileContent.Substring(0, 10000) + "... [truncated]";
                     }
 
-                    fullMessage += $"\n\nFile content:\n{fileContent}";
+                    prompt += $"\n\nFile content:\n{fileContent}";
                 }
                 catch (NotSupportedException ex)
                 {
-                    fullMessage += $"\n\n[Error extracting content: {ex.Message}]";
+                    prompt += $"\n\n[Error extracting content: {ex.Message}]";
                 }
             }
 
@@ -178,7 +164,7 @@ namespace mvctest.Services
                 model = "gpt-4o", 
                 messages = new[]
                 {
-                new { role = "user", content = fullMessage }
+                new { role = "user", content = prompt + userInput }
             },
                 temperature = 0.7,
                 max_tokens = 2048
@@ -208,25 +194,37 @@ namespace mvctest.Services
             return message ?? "No response from ChatGPT.";
         }
 
-        public async Task<string> DeepSeekSummarizeWithStreaming(string filePath)
+        public async Task<string> DeepSeekSummarizeWithStreaming(string filePath, string prompt = "", string usermessage = "")
         {
             var stopwatch = Stopwatch.StartNew();
 
             using var client = new HttpClient();
 
-            if (!File.Exists(filePath))
-                throw new FileNotFoundException("File not found!");
+            string fileContent = "";
 
-            string fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
+            // If file exists, extract text
+            if (File.Exists(filePath))
+            {
+                fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
 
-            if (fileContent.Length > 10000)
-                fileContent = fileContent.Substring(0, 10000) + "... [truncated]";
+                if (fileContent.Length > 10000)
+                    fileContent = fileContent.Substring(0, 10000) + "... [truncated]";
+            }
+            else if (!string.IsNullOrWhiteSpace(usermessage))
+            {
+                // If file not found but usermessage is available, use it instead
+                fileContent = usermessage;
+            }
+            else
+            {
+                // If both file and usermessage are empty, throw error
+                throw new FileNotFoundException("File not found and user message is empty!");
+            }
 
             var requestBody = new
             {
-                //model = "deepseek-coder:1.3b",
-                model = "deepseek-r1:1.5b",//deepseek-r1:1.5b
-                prompt = "Give me short Summary  for the following content what actually this content is about in 5 sentance :\n\n" + fileContent,
+                model = "deepseek-r1:1.5b",
+                prompt = prompt + fileContent,
                 stream = true
             };
 
@@ -244,7 +242,7 @@ namespace mvctest.Services
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationTokenSource.Token);
 
-            response.EnsureSuccessStatusCode(); // Add this to throw if status code is not 200 OK
+            response.EnsureSuccessStatusCode(); // Will throw if status code != 200 OK
 
             using var stream = await response.Content.ReadAsStreamAsync();
             using var reader = new StreamReader(stream);
@@ -262,10 +260,13 @@ namespace mvctest.Services
                     }
                 }
             }
+
             stopwatch.Stop();
             Console.WriteLine($"SummarizeWithStreaming executed in {stopwatch.ElapsedMilliseconds} ms");
+
             return sb.ToString();
         }
+
 
 
 

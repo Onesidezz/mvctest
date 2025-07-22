@@ -9,10 +9,8 @@ namespace mvctest.Controllers
     public class ContentManagerController : Controller
     {
         private readonly IContentManager _contentManager;
-        private readonly AppSettings _appSettings;
-        public ContentManagerController(IContentManager contentManager, IOptions<AppSettings> options)
+        public ContentManagerController(IContentManager contentManager)
         {
-            _appSettings = options.Value;
             _contentManager = contentManager;
         }
 
@@ -21,9 +19,6 @@ namespace mvctest.Controllers
             try
             {
                 var list = _contentManager.GetAllRecords("*");
-                _contentManager.GenerateChatTrainingDataCsv(list, _appSettings.TraningDataPath);
-                _contentManager.AppendAdvancedChatTrainingData(list, _appSettings.TraningDataPath);
-               
                 return View(list);
             }
             catch (Exception ex)

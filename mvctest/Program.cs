@@ -15,7 +15,7 @@ builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSet
 // ===== 3. Register Application Services =====
 builder.Services.AddScoped<IContentManager, ContentManager>();
 builder.Services.AddScoped<IChatMLService, ChatMLService>();
-
+builder.Services.AddScoped<IStartupFunctionalities, MyStartupTasks>();
 // ===== 4. Register HTTP & Session Services =====
 builder.Services.AddHttpClient(); // 👈 Register HttpClientFactory
 builder.Services.AddHttpContextAccessor(); // 👈 For accessing HttpContext in services

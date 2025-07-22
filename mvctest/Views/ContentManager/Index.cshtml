@@ -117,6 +117,17 @@
                  "<'row mt-2'<'col-sm-6 d-flex justify-content-start'p>>" // Pagination bottom left
         });
 
+                function clearChatWindow() {
+            $('#chatWindow').empty();
+        }
+
+
+                  $('#chatClose').on('click', function () {
+            $('#chatContainer').hide();
+            clearChatWindow(); // Optional: clear chat on close
+        });
+
+
 
 
             // Select/Deselect All
@@ -293,10 +304,11 @@
             });
         });
 
+
         
         //-------------------------------------------------------------------------------------
 
-
+       
 
     </script>
 }

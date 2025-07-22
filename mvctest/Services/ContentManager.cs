@@ -39,7 +39,7 @@ namespace mvctest.Services
             database.Connect();
         }
 
-        private void EnsureConnected()
+        public void EnsureConnected()
         {
             datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
             workgroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl");
@@ -554,6 +554,56 @@ namespace mvctest.Services
 
            
 
+            // 2. Date range simulation (basic)
+            // ✅ 2. Date range combinations with counts and titles
+            var validDateRecords = records
+                .Where(r => DateTime.TryParse(r.DateCreated, out _))
+                .Select(r => new
+                {
+                    Record = r,
+                    ParsedDate = DateTime.Parse(r.DateCreated!)
+                })
+                .OrderBy(r => r.ParsedDate)
+                .ToList();
+
+            for (int i = 0; i < validDateRecords.Count; i++)
+            {
+                for (int j = i; j < validDateRecords.Count; j++) // allow j == i
+                {
+                    var start = validDateRecords[i].ParsedDate;
+                    var end = validDateRecords[j].ParsedDate;
+
+                    var inRange = validDateRecords
+                        .Where(r => r.ParsedDate >= start && r.ParsedDate <= end)
+                        .Select(r => r.Record)
+                        .ToList();
+
+                    if (inRange.Count < 1) continue;
+
+                    string rangeText = $"{start:MM/dd/yyyy} to {end:MM/dd/yyyy}";
+                    string recordList = string.Join(" ", inRange.Select((r, index) => $"{index + 1}. {r.Title?.Trim()}"));
+                    string label = $"There are {inRange.Count} records created between {rangeText} including: {recordList}";
+
+                    var prompts = new[]
+                    {
+            $"Show records between {rangeText}",
+        };
+
+                    foreach (var prompt in prompts)
+                    {
+                        trainingData.Add(new ChatData
+                        {
+                            Text = prompt,
+                            Label = label
+                        });
+                    }
+                }
+            }
+
+
+            Console.WriteLine($"Count of Date {trainingData.Count}");
+
+
             // 1. Multi-entity training: queries involving multiple fields
             foreach (var record in records)
             {
@@ -586,56 +636,6 @@ namespace mvctest.Services
                     });
                 }
             }
-
-            // 2. Date range simulation (basic)
-            // ✅ 2. Date range combinations with counts and titles
-            var validDateRecords = records
-                .Where(r => DateTime.TryParse(r.DateCreated, out _))
-                .Select(r => new
-                {
-                    Record = r,
-                    ParsedDate = DateTime.Parse(r.DateCreated!)
-                })
-                .OrderBy(r => r.ParsedDate)
-                .ToList();
-
-            for (int i = 0; i < validDateRecords.Count; i++)
-            {
-                for (int j = i + 1; j < validDateRecords.Count; j++)
-                {
-                    var start = validDateRecords[i].ParsedDate;
-                    var end = validDateRecords[j].ParsedDate;
-
-                    var inRange = validDateRecords
-                        .Where(r => r.ParsedDate >= start && r.ParsedDate <= end)
-                        .Select(r => r.Record)
-                        .ToList();
-
-                    if (inRange.Count < 1) continue;
-
-                    string rangeText = $"{start:MM/dd/yyyy} to {end:MM/dd/yyyy}";
-                    string recordList = string.Join(" ", inRange.Select((r, index) => $"{index + 1}. {r.Title?.Trim()}"));
-                    string label = $"There are {inRange.Count} records created between {rangeText} including: {recordList}";
-
-                    var prompts = new[]
-                    {
-            $"Show records between {rangeText}",
-            $"Which documents were created between {start:MMMM dd, yyyy} and {end:MMMM dd, yyyy}?",
-            $"List files from {rangeText}",
-            $"Records created between {rangeText}"
-        };
-
-                    foreach (var prompt in prompts)
-                    {
-                        trainingData.Add(new ChatData
-                        {
-                            Text = prompt,
-                            Label = label
-                        });
-                    }
-                }
-            }
-
 
             // 3. Fuzzy synonyms
             var synonyms = new[] { "docs", "documents", "files", "entries", "items", "records" };

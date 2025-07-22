@@ -19,7 +19,7 @@
             </p>
 
             <!-- Required Dataset Info Form -->
-            <form asp-action="AccessLog" asp-controller="Home" method="post" class="mt-4">
+            <form asp-action="AccessLog" asp-controller="Home" method="post" class="mt-4" onsubmit="showLoader()">
                 <div class="mb-3">
                     <label for="DataSetId" class="form-label fw-bold">Dataset ID</label>
                     <input type="text" name="DataSetId" id="DataSetId" class="form-control" placeholder="Enter Dataset ID" required />
@@ -31,6 +31,7 @@
                 <button type="submit" class="btn btn-primary btn-lg me-2">Explore Records</button>
                 <a href="https://www.opentext.com/products/content-manager" target="_blank" class="btn btn-outline-secondary btn-lg">Learn More</a>
             </form>
+
         </div>
 
         <div class="col-md-6 text-center">

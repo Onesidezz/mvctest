@@ -8,9 +8,68 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/mvctest.styles.css" asp-append-version="true" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
-
-    <!-- DataTables CSS -->
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css" />
+
+    <style>
+        #loader {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            z-index: 9999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .loader-spinner {
+            width: 80px;
+            height: 80px;
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @@keyframes spin {
+            0%
+
+        {
+            transform: rotate(0deg);
+        }
+
+        100% {
+            transform: rotate(360deg);
+        }
+
+        }
+
+        .loader-text {
+            margin-top: 20px;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #333;
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        @@keyframes fadeIn {
+            from
+
+        {
+            opacity: 0;
+        }
+
+        to {
+            opacity: 1;
+        }
+
+        }
+    </style>
 
 </head>
 <body>
@@ -30,31 +89,84 @@
                         <li class="nav-item">
                             <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a>
                         </li>
-                      
                     </ul>
                 </div>
             </div>
         </nav>
     </header>
+
     <div class="container">
         <main role="main" class="pb-3">
             @RenderBody()
         </main>
     </div>
 
+    <!-- Loader with GIF -->
+    <!-- Loader (hidden by default) -->
+    <div id="loader" style="
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(255,255,255,0.7);
+    z-index: 9999;
+    text-align: center;
+">
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+            <img src="~/images/loader.gif" alt="Loading..." style="width: 60px;" />
+            <p style="margin-top: 10px;">Please wait, loading...</p>
+        </div>
+    </div>
+
+
+
+
     <footer class="border-top footer text-muted">
         <div class="container">
             &copy; 2025 - mvctest - <a asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a>
         </div>
     </footer>
+
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
-    <!-- jQuery and DataTables JS -->
     <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 
-    @await RenderSectionAsync("Scripts", required: false)
+    <script>
+        // Show loader before full page unload
+        window.addEventListener('beforeunload', function () {
+            $("#loader").show();
+        });
 
+        // Show/hide loader globally during AJAX calls (skip if chatContainer is open)
+        $(document).ajaxStart(function () {
+            if (!$("#chatContainer").is(":visible")) {
+                $("#loader").show();
+            }
+        }).ajaxStop(function () {
+            $("#loader").hide();
+        });
+
+        // Show loader on any <form> submit, only if chatContainer is hidden
+        $(document).ready(function () {
+            $("form").on("submit", function () {
+                if (!$("#chatContainer").is(":visible")) {
+                    $("#loader").show();
+                }
+            });
+        });
+
+        // Optional: Manual hide (e.g., after a timeout or error)
+        function hideLoader() {
+            $("#loader").hide();
+        }
+    </script>
+
+
+  
+
+
+    @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

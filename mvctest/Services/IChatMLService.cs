@@ -2,8 +2,8 @@
 {
     public interface IChatMLService
     {
-        void TrainModel();
+        Task TrainModelAsync();
         Task<string> GetChatBotResponse(string userMessage,bool isFromGPT= false,bool isFromDeepseek =false);
-        Task<string> GetChatGptResponseAsync(string userInput, string? filePath = null);
+        Task<string> GetChatGptResponseAsync(string userInput, string? filePath = null, string prompt = "");
     }
 }

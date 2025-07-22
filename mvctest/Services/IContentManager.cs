@@ -5,6 +5,7 @@ namespace mvctest.Services
 {
     public interface IContentManager
     {
+        void EnsureConnected();
         void ConnectDataBase(String dataSetId, String workGroupServerUrl);
         Record GetRecordByTitle(string title);
         List<RecordViewModel> GetAllRecords(string all);
