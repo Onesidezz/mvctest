@@ -7,6 +7,9 @@ namespace mvctest.Models
         public class ChatInput
         {
             public string UserMessage { get; set; }
+            public bool IsFromChatGPT { get; set; }
+            public bool IsFromChatDeepSeek { get; set; }
+
         }
 
         public class ChatResponse

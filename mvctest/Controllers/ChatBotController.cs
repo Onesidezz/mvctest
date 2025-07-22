@@ -20,7 +20,7 @@ namespace mvctest.Controllers
         [HttpPost]
         public async Task<ActionResult> GetResponse(ChatInput input)
         {
-            var response = await _chatMLService.GetChatBotResponse(input.UserMessage);
+            var response = await _chatMLService.GetChatBotResponse(input.UserMessage,input.IsFromChatGPT,input.IsFromChatDeepSeek);
             return Json(new ChatResponse { ResponseMessage = response });
         }
         

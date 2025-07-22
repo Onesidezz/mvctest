@@ -144,28 +144,58 @@
                     sendMessage();
                 }
             });
+                    function sendMessage() {
+            var message = $('#userInput').val().trim();
+            if (message === '') return;
 
-            function sendMessage() {
-                var message = $('#userInput').val().trim();
-                if (message === '') return;
+            $('#chatWindow').append('<div class="chat-bubble chat-user">' + message + '</div>');
 
-                $('#chatWindow').append('<div class="chat-bubble chat-user">' + message + '</div>');
+            // Get selected model
+            var selectedModel = $('#aiModel').val();
+            var isFromChatGPT = selectedModel === 'chatgpt';
+            var isFromChatDeepSeek = selectedModel === 'deepseek';
 
-                $.ajax({
-                    url: '@Url.Action("GetResponse", "ChatBot")',
-                    type: 'POST',
-                    data: { UserMessage: message },
-                    success: function (data) {
-                        $('#chatWindow').append('<div class="chat-bubble chat-bot">' + data.responseMessage + '</div>');
-                        $('#chatWindow').scrollTop($('#chatWindow')[0].scrollHeight);
-                    },
-                    error: function (xhr, status, error) {
-                        console.error("Error:", error);
-                    }
-                });
+            $.ajax({
+                url: '@Url.Action("GetResponse", "ChatBot")',
+                type: 'POST',
+                data: {
+                    UserMessage: message,
+                    IsFromChatGPT: isFromChatGPT,
+                    IsFromChatDeepSeek: isFromChatDeepSeek
+                },
+                success: function (data) {
+                    $('#chatWindow').append('<div class="chat-bubble chat-bot">' + data.responseMessage + '</div>');
+                    $('#chatWindow').scrollTop($('#chatWindow')[0].scrollHeight);
+                },
+                error: function (xhr, status, error) {
+                    console.error("Error:", error);
+                }
+            });
 
-                $('#userInput').val('');
-            }
+            $('#userInput').val('');
+        }
+
+            // function sendMessage() {
+            //     var message = $('#userInput').val().trim();
+            //     if (message === '') return;
+
+            //     $('#chatWindow').append('<div class="chat-bubble chat-user">' + message + '</div>');
+
+            //     $.ajax({
+            //         url: '@Url.Action("GetResponse", "ChatBot")',
+            //         type: 'POST',
+            //         data: { UserMessage: message },
+            //         success: function (data) {
+            //             $('#chatWindow').append('<div class="chat-bubble chat-bot">' + data.responseMessage + '</div>');
+            //             $('#chatWindow').scrollTop($('#chatWindow')[0].scrollHeight);
+            //         },
+            //         error: function (xhr, status, error) {
+            //             console.error("Error:", error);
+            //         }
+            //     });
+
+            //     $('#userInput').val('');
+            // }
         });
 
         //-----------------------------VoiceRecognaization-------------------------------------
@@ -235,8 +265,8 @@
             $('#aiModel').on('change', function () {
                 const selectedModel = $(this).val();
 
-                if (selectedModel === 'deepseek') {
-                    const suggestions = [
+        if (selectedModel === 'deepseek' || selectedModel === 'chatgpt') {
+                            const suggestions = [
                         "Do you want a summary of this record? Please Enter Record Name : ",
                         "Which record summary do you want to know? Please Enter Record Name : ",
                         "Show me the record summary for Record Name : "

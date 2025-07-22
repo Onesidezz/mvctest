@@ -14,7 +14,6 @@ namespace mvctest.Services
 {
     public class ChatMLService : IChatMLService
     {
-        private readonly LocalSummarizationService _summaryService;
 
       
         
@@ -29,7 +28,6 @@ namespace mvctest.Services
             _settings = options.Value;
             _httpClient = httpClient;
             _mlContext = new MLContext();
-            _summaryService = new LocalSummarizationService();
             if (File.Exists(_settings.TrainedModelPath))
             {
                 using var stream = new FileStream(_settings.TrainedModelPath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -45,28 +43,49 @@ namespace mvctest.Services
             _contentManager = contentManager;
         }
 
-        public async Task<string> GetChatBotResponse(string userMessage)
+        public async Task<string> GetChatBotResponse(string userMessage, bool isFromGPT = false, bool isFromDeepseek = false)
         {
             try
             {
-                if (IsChatGPTSummaryRequest(userMessage, out string recordName))
+                string[] triggers =
                 {
-                    var record = _contentManager.GetRecordByTitle(recordName);
-                    if (record != null)
+            "Do you want a summary of this record? Please Enter Record Name :",
+            "Which record summary do you want to know? Please Enter Record Name :",
+            "Show me the record summary for Record Name :"
+        };
+
+                foreach (var trigger in triggers)
+                {
+                    if (userMessage.StartsWith(trigger, StringComparison.OrdinalIgnoreCase))
                     {
-                        //var summary = await _summaryService.GetSummaryAsync("", record.ESource);
-                        var summary2 = await SummarizeWithStreaming( record.ESource);
-                        return summary2;
-                        //var response = await GetChatGptResponseAsync(userMessage, record.ESource);
-                        //return response;
-                    }
-                    else
-                    {
-                        return $"Sorry, I couldn't find a record named \"{recordName}\".";
+                        string recordName = userMessage.Substring(trigger.Length).Trim();
+                        var record = _contentManager.GetRecordByTitle(recordName);
+
+                        if (record != null)
+                        {
+                            if (isFromGPT)
+                            {
+                                var response = await GetChatGptResponseAsync(userMessage, record.ESource);
+                                return response;
+                            }
+                            else if (isFromDeepseek)
+                            {
+                                var summary = await DeepSeekSummarizeWithStreaming(record.ESource);
+                                return summary;
+                            }
+                            else
+                            {
+                                return "Please specify a valid source (isFromGPT or isFromDeepseek).";
+                            }
+                        }
+                        else
+                        {
+                            return $"Sorry, I couldn't find a record named \"{recordName}\".";
+                        }
                     }
                 }
 
-                // Else use ML.NET prediction
+                // Fallback to ML.NET intent prediction
                 var input = new ChatData { Text = userMessage };
                 var prediction = _predictionEngine.Predict(input);
                 return prediction.PredictedIntent;
@@ -76,6 +95,7 @@ namespace mvctest.Services
                 return $"Error: {ex.Message}";
             }
         }
+
 
 
         private bool IsChatGPTSummaryRequest(string message, out string recordName)
@@ -123,50 +143,12 @@ namespace mvctest.Services
             _mlContext.Model.Save(model, trainingData.Schema, fs);
 
             stopwatch.Stop();
-            Console.WriteLine($"TrainModel executed in {stopwatch.ElapsedMilliseconds} ms");
+            Console.WriteLine($"TrainModel executed in {stopwatch.Elapsed.TotalMinutes:F2} minutes");
         }
-
-        //public void TrainModel()
-        //{
-        //    try
-        //    {
-        //        var stopwatch = Stopwatch.StartNew();
-
-        //        // Load from CSV
-        //        var trainingData = _mlContext.Data.LoadFromTextFile<ChatData>(
-        //            path: _settings.TraningDataPath,
-        //            hasHeader: true,
-        //            separatorChar: ',');
-
-
-
-        //        //var pipeline = _mlContext.Transforms.Text.FeaturizeText("Features", nameof(ChatData.Text))
-        //        //    .Append(_mlContext.Transforms.Conversion.MapValueToKey("Label"))
-        //        //    .Append(_mlContext.MulticlassClassification.Trainers.SdcaMaximumEntropy())
-        //        //    .Append(_mlContext.Transforms.Conversion.MapKeyToValue("PredictedLabel"));
-        //        // Pipeline: use Text + Entities + Context to predict Intent
-
-
-        //        var model = intentPipeline.Fit(trainingData);
-        //        _predictionEngine = _mlContext.Model.CreatePredictionEngine<ChatData, ChatPrediction>(model);
-
-        //        // Save trained model
-        //        using var fs = new FileStream(_settings.TrainedModelPath, FileMode.Create, FileAccess.Write, FileShare.Write);
-        //        _mlContext.Model.Save(model, trainingData.Schema, fs);
-
-        //        stopwatch.Stop();
-        //        Console.WriteLine($"TrainModel executed in {stopwatch.ElapsedMilliseconds} ms");
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Console.WriteLine("error: " + ex.Message);
-        //        throw;
-        //    }
-        //}
 
         public async Task<string> GetChatGptResponseAsync(string userInput, string? filePath = null)
         {
-            string fullMessage = "Need small summary of this file.";
+            string fullMessage = "Give me short Summary  for the following content what actually this content is about in 5 sentance :\n\n";
 
             if (!string.IsNullOrEmpty(filePath))
             {
@@ -193,16 +175,16 @@ namespace mvctest.Services
 
             var requestData = new
             {
-                model = "gpt-4", // or "gpt-3.5-turbo"
+                model = "gpt-4o", 
                 messages = new[]
                 {
-            new { role = "user", content = fullMessage }
-        },
+                new { role = "user", content = fullMessage }
+            },
                 temperature = 0.7,
                 max_tokens = 2048
             };
 
-            _httpClient.DefaultRequestHeaders.Authorization =
+                _httpClient.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _settings.ChatGptApiKey);
 
             var json = JsonSerializer.Serialize(requestData);
@@ -226,7 +208,7 @@ namespace mvctest.Services
             return message ?? "No response from ChatGPT.";
         }
 
-        public async Task<string> SummarizeWithStreaming(string filePath)
+        public async Task<string> DeepSeekSummarizeWithStreaming(string filePath)
         {
             var stopwatch = Stopwatch.StartNew();
 
@@ -242,7 +224,8 @@ namespace mvctest.Services
 
             var requestBody = new
             {
-                model = "deepseek-coder:1.3b",
+                //model = "deepseek-coder:1.3b",
+                model = "deepseek-r1:1.5b",//deepseek-r1:1.5b
                 prompt = "Give me short Summary  for the following content what actually this content is about in 5 sentance :\n\n" + fileContent,
                 stream = true
             };
