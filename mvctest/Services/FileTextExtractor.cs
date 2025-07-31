@@ -1,11 +1,11 @@
-﻿namespace mvctest.Services
+﻿using DocumentFormat.OpenXml.Packaging;
+using iText.Kernel.Pdf;
+using iText.Kernel.Pdf.Canvas.Parser;
+using System.IO;
+using System.Text;
+using TRIM.SDK;
+namespace mvctest.Services
 {
-    using DocumentFormat.OpenXml.Packaging;
-    using iText.Kernel.Pdf;
-    using iText.Kernel.Pdf.Canvas.Parser;
-    using System.IO;
-    using System.Text;
-
     public static class FileTextExtractor
     {
         public static string ExtractTextFromFile(string filePath)
@@ -22,7 +22,15 @@
                 _ => throw new NotSupportedException($"File type '{extension}' is not supported."),
             };
         }
-
+        private static readonly HashSet<string> SupportedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ".txt", ".pdf", ".docx", ".xlsx", ".pptx"
+    };
+        public static bool IsFileTypeSupported(string filePath)
+        {
+            string extension = Path.GetExtension(filePath);
+            return SupportedExtensions.Contains(extension);
+        }
         private static string ExtractTextFromPdf(string filePath)
         {
             using var pdfReader = new PdfReader(filePath);
@@ -61,5 +69,8 @@
             }
             return text.ToString();
         }
+
+
+
     }
 }

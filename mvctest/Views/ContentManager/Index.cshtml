@@ -1,7 +1,7 @@
-﻿@model IEnumerable<mvctest.Models.RecordViewModel>
+﻿@model mvctest.Models.PaginatedRecordViewModel
 
 @{
-    ViewData["Title"] = "Index";
+    ViewData["Title"] = "Record List";
 }
 
 <style>
@@ -19,23 +19,18 @@
     }
 
     @@keyframes pulse {
-        0%
-
-    {
-        transform: scale(1);
-        box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.5);
-    }
-
-    70% {
-        transform: scale(1.1);
-        box-shadow: 0 0 0 10px rgba(255, 0, 0, 0);
-    }
-
-    100% {
-        transform: scale(1);
-        box-shadow: 0 0 0 0 rgba(255, 0, 0, 0);
-    }
-
+        0% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.5);
+        }
+        70% {
+            transform: scale(1.1);
+            box-shadow: 0 0 0 10px rgba(255, 0, 0, 0);
+        }
+        100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(255, 0, 0, 0);
+        }
     }
 
     #voiceBtn.listening {
@@ -43,8 +38,64 @@
         background-color: #f8d7da;
         color: red;
     }
-</style>
 
+    .pagination-info {
+        color: #6c757d;
+        font-size: 0.9rem;
+        margin-bottom: 15px;
+    }
+
+    .page-size-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+
+    .pagination {
+        margin-top: 20px;
+        margin-bottom: 20px;
+    }
+
+    .page-link {
+        color: #007bff;
+        border-color: #dee2e6;
+    }
+
+    .page-item.active .page-link {
+        background-color: #007bff;
+        border-color: #007bff;
+    }
+
+    .page-item.disabled .page-link {
+        color: #6c757d;
+        pointer-events: none;
+        cursor: not-allowed;
+        background-color: #fff;
+        border-color: #dee2e6;
+    }
+
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+    }
+
+    .table-warning {
+        background-color: #fff3cd !important;
+    }
+
+    .badge {
+        font-size: 0.75em;
+    }
+</style>
 
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
@@ -52,51 +103,246 @@
         <a asp-action="Create" class="btn btn-success">Create New</a>
     </div>
 
-    <!-- ✅ Moved Download Button INTO form -->
-    <form asp-action="DownloadSelected" method="post">
-        <div class="mt-3 text-end">
-            <button type="submit" class="btn btn-primary">Download Selected</button>
+    <!-- Page Size Controls and Info -->
+    <div class="d-flex justify-content-between align-items-center">
+        <div class="pagination-info">
+            <strong>
+                @if (Model.TotalRecords > 0)
+                {
+                    <text>Showing @Model.StartRecord to @Model.EndRecord of @Model.TotalRecords records</text>
+                }
+                else
+                {
+                    <text>No records found</text>
+                }
+            </strong>
         </div>
+        
+        @if (Model.TotalRecords > 0)
+        {
+            <div class="page-size-controls">
+                <label for="pageSize" class="form-label mb-0">Show:</label>
+                <form method="get" asp-action="Index" class="d-inline">
+                    <input type="hidden" name="page" value="1" />
+                    <select name="pageSize" id="pageSize" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+                        <option value="5" @@(Model.PageSize == 5 ? "selected" : "")>5</option>
+                        <option value="10" @@(Model.PageSize == 10 ? "selected" : "")>10</option>
+                        <option value="25" @@(Model.PageSize == 25 ? "selected" : "")>25</option>
+                        <option value="50" @@(Model.PageSize == 50 ? "selected" : "")>50</option>
+                        <option value="100" @@(Model.PageSize == 100 ? "selected" : "")>100</option>
+                    </select>
+                </form>
+                <span class="text-muted">entries</span>
+            </div>
+        }
+    </div>
+
+    <form asp-action="DownloadSelected" method="post">
+        @if (Model.TotalRecords > 0)
+        {
+            <div class="mt-3 text-end">
+                <button type="submit" class="btn btn-primary">Download Selected</button>
+            </div>
+        }
         <br />
+        
         <div class="table-responsive">
-            <table id="recordsTable" class="table table-striped table-hover table-bordered shadow-sm align-middle">
+            <table class="table table-striped table-hover table-bordered shadow-sm align-middle">
                 <thead class="table-dark">
                     <tr>
-                        <th><input type="checkbox" id="selectAll" /></th>
-                        <th class="wrap-column">@Html.DisplayNameFor(model => model.Title)</th>
-                        <th class="wrap-column">@Html.DisplayNameFor(model => model.Container)</th>
-                        <th>@Html.DisplayNameFor(model => model.IsContainer)</th>
-                        <th>@Html.DisplayNameFor(model => model.Assignee)</th>
-                        <th>@Html.DisplayNameFor(model => model.DateCreated)</th>
-                        <th class="text-center">Actions</th>
+                        <th style="width: 50px;">
+                            @if (Model.Records != null && Model.Records.Any(r => r.IsContainer != "Container"))
+                            {
+                                <input type="checkbox" id="selectAll" />
+                            }
+                        </th>
+                        <th class="wrap-column">Title</th>
+                        <th class="wrap-column">Container</th>
+                        <th style="width: 120px;">Type</th>
+                        <th style="width: 120px;">Assignee</th>
+                        <th style="width: 100px;">Date Created</th>
+                        <th class="text-center" style="width: 150px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var item in Model)
+                    @if (Model.Records != null && Model.Records.Any())
+                    {
+                        @foreach (var item in Model.Records)
+                        {
+                            <tr>
+                                <td>
+                                    @if (item.IsContainer != "Container")
+                                    {
+                                        <input type="checkbox" name="selectedIds" value="@item.URI" />
+                                    }
+                                </td>
+                                <td class="wrap-column">@(item.Title ?? "N/A")</td>
+                                <td class="wrap-column">@(item.Container ?? "")</td>
+                                <td>
+                                    <span class="badge @(item.IsContainer == "Container" ? "bg-primary" : 
+                                                         item.IsContainer == "Child Document" ? "bg-success" : 
+                                                         item.IsContainer == "Child (Unresolved)" ? "bg-warning text-dark" : "bg-secondary")">
+                                        @(item.IsContainer ?? "Unknown")
+                                    </span>
+                                </td>
+                                <td>@(item.Assignee ?? "N/A")</td>
+                                <td>@(item.DateCreated ?? "N/A")</td>
+                                <td>
+                                    <div class="table-actions">
+                                        <a asp-action="Details" asp-route-id="@item.URI" class="btn btn-sm btn-info text-white" title="View Details">
+                                            <i class="fas fa-eye"></i> Details
+                                        </a>
+                                        @if (item.URI > 0)
+                                        {
+                                            <a asp-action="Delete" asp-route-id="@item.URI" class="btn btn-sm btn-danger" title="Delete" 
+                                               onclick="return confirm('Are you sure you want to delete this record?')">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </a>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
                     {
                         <tr>
-                            <td>
-                                @if (item.IsContainer != "Container")
-                                {
-                                    <input type="checkbox" name="selectedIds" value="@item.URI" />
-                                }
-                            </td>
-                            <td class="wrap-column">@Html.DisplayFor(modelItem => item.Title)</td>
-                            <td class="wrap-column">@Html.DisplayFor(modelItem => item.Container)</td>
-                            <td>@Html.DisplayFor(modelItem => item.IsContainer)</td>
-                            <td>@Html.DisplayFor(modelItem => item.Assignee)</td>
-                            <td>@Html.DisplayFor(modelItem => item.DateCreated)</td>
-                            <td>
-                                <div class="table-actions">
-                                    <a asp-action="Details" asp-route-id="@item.URI" class="btn btn-sm btn-info text-white">Details</a>
-                                    <a asp-action="Delete" asp-route-id="@item.URI" class="btn btn-sm btn-danger">Delete</a>
-                                </div>
+                            <td colspan="7" class="text-center text-muted py-4">
+                                <i class="fas fa-inbox fa-3x mb-3"></i>
+                                <h5>No records found</h5>
+                                <p>There are no records to display.</p>
                             </td>
                         </tr>
                     }
                 </tbody>
             </table>
         </div>
+
+        <!-- Backend Pagination Controls -->
+        @if (Model.TotalPages > 1)
+        {
+            <nav aria-label="Page navigation">
+                <ul class="pagination justify-content-center">
+                    <!-- First Page Button -->
+                    <li class="page-item @(!Model.HasPreviousPage ? "disabled" : "")">
+                        @if (!Model.HasPreviousPage)
+                        {
+                            <span class="page-link">First</span>
+                        }
+                        else
+                        {
+                            <a class="page-link" asp-action="Index" asp-route-page="1" asp-route-pageSize="@Model.PageSize">First</a>
+                        }
+                    </li>
+
+                    <!-- Previous Page Button -->
+                    <li class="page-item @(!Model.HasPreviousPage ? "disabled" : "")">
+                        @if (!Model.HasPreviousPage)
+                        {
+                            <span class="page-link">Previous</span>
+                        }
+                        else
+                        {
+                            <a class="page-link" asp-action="Index" asp-route-page="@(Model.CurrentPage - 1)" asp-route-pageSize="@Model.PageSize">Previous</a>
+                        }
+                    </li>
+
+                    <!-- Page Numbers with Smart Display -->
+                    @{
+                        int startPage = Math.Max(1, Model.CurrentPage - 2);
+                        int endPage = Math.Min(Model.TotalPages, Model.CurrentPage + 2);
+                        
+                        // Adjust to always show 5 pages when possible
+                        if (endPage - startPage < 4)
+                        {
+                            if (startPage == 1)
+                            {
+                                endPage = Math.Min(Model.TotalPages, startPage + 4);
+                            }
+                            else if (endPage == Model.TotalPages)
+                            {
+                                startPage = Math.Max(1, endPage - 4);
+                            }
+                        }
+                    }
+
+                    <!-- Show first page and ellipsis if needed -->
+                    @if (startPage > 1)
+                    {
+                        <li class="page-item">
+                            <a class="page-link" asp-action="Index" asp-route-page="1" asp-route-pageSize="@Model.PageSize">1</a>
+                        </li>
+                        @if (startPage > 2)
+                        {
+                            <li class="page-item disabled">
+                                <span class="page-link">...</span>
+                            </li>
+                        }
+                    }
+
+                    <!-- Display page numbers -->
+                    @for (int i = startPage; i <= endPage; i++)
+                    {
+                        <li class="page-item @(Model.CurrentPage == i ? "active" : "")">
+                            @if (Model.CurrentPage == i)
+                            {
+                                <span class="page-link">@i <span class="sr-only">(current)</span></span>
+                            }
+                            else
+                            {
+                                <a class="page-link" asp-action="Index" asp-route-page="@i" asp-route-pageSize="@Model.PageSize">@i</a>
+                            }
+                        </li>
+                    }
+
+                    <!-- Show ellipsis and last page if needed -->
+                    @if (endPage < Model.TotalPages)
+                    {
+                        @if (endPage < Model.TotalPages - 1)
+                        {
+                            <li class="page-item disabled">
+                                <span class="page-link">...</span>
+                            </li>
+                        }
+                        <li class="page-item">
+                            <a class="page-link" asp-action="Index" asp-route-page="@Model.TotalPages" asp-route-pageSize="@Model.PageSize">@Model.TotalPages</a>
+                        </li>
+                    }
+
+                    <!-- Next Page Button -->
+                    <li class="page-item @(!Model.HasNextPage ? "disabled" : "")">
+                        @if (!Model.HasNextPage)
+                        {
+                            <span class="page-link">Next</span>
+                        }
+                        else
+                        {
+                            <a class="page-link" asp-action="Index" asp-route-page="@(Model.CurrentPage + 1)" asp-route-pageSize="@Model.PageSize">Next</a>
+                        }
+                    </li>
+
+                    <!-- Last Page Button -->
+                    <li class="page-item @(!Model.HasNextPage ? "disabled" : "")">
+                        @if (!Model.HasNextPage)
+                        {
+                            <span class="page-link">Last</span>
+                        }
+                        else
+                        {
+                            <a class="page-link" asp-action="Index" asp-route-page="@Model.TotalPages" asp-route-pageSize="@Model.PageSize">Last</a>
+                        }
+                    </li>
+                </ul>
+            </nav>
+
+            <!-- Additional Pagination Info -->
+            <div class="text-center text-muted mb-3">
+                <small>
+                    Page @Model.CurrentPage of @Model.TotalPages 
+                    (@Model.TotalRecords total records)
+                </small>
+            </div>
+        }
     </form>
 
     @await Html.PartialAsync("_ChatBotPartial")
@@ -104,37 +350,46 @@
 
 @section Scripts {
     <script>
-
         $(document).ready(function () {
-            $('#recordsTable').DataTable({
-            paging: true,
-            pageLength: 10,
-            ordering: false,
-            searching: false,
-            info: false,
-            lengthChange: false,
-            dom: "<'row'<'col-sm-12'tr>>" +    // Table
-                 "<'row mt-2'<'col-sm-6 d-flex justify-content-start'p>>" // Pagination bottom left
-        });
+            // Clear chat window function
+            function clearChatWindow() {
+                $('#chatWindow').empty();
+            }
 
-                function clearChatWindow() {
-            $('#chatWindow').empty();
-        }
+            // Chat close event
+            $('#chatClose').on('click', function () {
+                $('#chatContainer').hide();
+                clearChatWindow();
+            });
 
-
-                  $('#chatClose').on('click', function () {
-            $('#chatContainer').hide();
-            clearChatWindow(); // Optional: clear chat on close
-        });
-
-
-
-
-            // Select/Deselect All
+            // Select/Deselect All Checkboxes
             $('#selectAll').on('change', function () {
-                $('input[name="selectedIds"]').each(function () {
-                    this.checked = $('#selectAll').prop('checked');
-                });
+                const isChecked = $(this).prop('checked');
+                $('input[name="selectedIds"]').prop('checked', isChecked);
+                
+                // Update visual feedback
+                if (isChecked) {
+                    $('input[name="selectedIds"]').closest('tr').addClass('table-warning');
+                } else {
+                    $('input[name="selectedIds"]').closest('tr').removeClass('table-warning');
+                }
+            });
+
+            // Individual checkbox change event
+            $('input[name="selectedIds"]').on('change', function () {
+                const $row = $(this).closest('tr');
+                if ($(this).prop('checked')) {
+                    $row.addClass('table-warning');
+                } else {
+                    $row.removeClass('table-warning');
+                    $('#selectAll').prop('checked', false);
+                }
+
+                // Check if all individual checkboxes are checked
+                const totalCheckboxes = $('input[name="selectedIds"]').length;
+                const checkedCheckboxes = $('input[name="selectedIds"]:checked').length;
+                
+                $('#selectAll').prop('checked', totalCheckboxes === checkedCheckboxes && totalCheckboxes > 0);
             });
 
             // Chatbot Logic
@@ -155,63 +410,48 @@
                     sendMessage();
                 }
             });
-                    function sendMessage() {
-            var message = $('#userInput').val().trim();
-            if (message === '') return;
 
-            $('#chatWindow').append('<div class="chat-bubble chat-user">' + message + '</div>');
+            function sendMessage() {
+                var message = $('#userInput').val().trim();
+                if (message === '') return;
 
-            // Get selected model
-            var selectedModel = $('#aiModel').val();
-            var isFromChatGPT = selectedModel === 'chatgpt';
-            var isFromChatDeepSeek = selectedModel === 'deepseek';
+                $('#chatWindow').append('<div class="chat-bubble chat-user">' + message + '</div>');
 
-            $.ajax({
-                url: '@Url.Action("GetResponse", "ChatBot")',
-                type: 'POST',
-                data: {
-                    UserMessage: message,
-                    IsFromChatGPT: isFromChatGPT,
-                    IsFromChatDeepSeek: isFromChatDeepSeek
-                },
-                success: function (data) {
-                    $('#chatWindow').append('<div class="chat-bubble chat-bot">' + data.responseMessage + '</div>');
-                    $('#chatWindow').scrollTop($('#chatWindow')[0].scrollHeight);
-                },
-                error: function (xhr, status, error) {
-                    console.error("Error:", error);
+                var selectedModel = $('#aiModel').val();
+                var isFromChatGPT = selectedModel === 'chatgpt';
+                var isFromChatDeepSeek = selectedModel === 'deepseek';
+
+                $.ajax({
+                    url: '@Url.Action("GetResponse", "ChatBot")',
+                    type: 'POST',
+                    data: {
+                        UserMessage: message,
+                        IsFromChatGPT: isFromChatGPT,
+                        IsFromChatDeepSeek: isFromChatDeepSeek
+                    },
+                    success: function (data) {
+                        $('#chatWindow').append('<div class="chat-bubble chat-bot">' + data.responseMessage + '</div>');
+                        $('#chatWindow').scrollTop($('#chatWindow')[0].scrollHeight);
+                    },
+                    error: function (xhr, status, error) {
+                        console.error("Error:", error);
+                        $('#chatWindow').append('<div class="chat-bubble chat-bot text-danger">Error: Unable to get response</div>');
+                    }
+                });
+
+                $('#userInput').val('');
+            }
+
+            // Show loading indicator for page changes
+            $('.page-link').on('click', function() {
+                if (!$(this).parent().hasClass('disabled') && !$(this).parent().hasClass('active')) {
+                    $('body').append('<div class="loading-overlay"><div class="spinner-border text-primary" role="status"><span class="sr-only">Loading...</span></div></div>');
                 }
             });
-
-            $('#userInput').val('');
-        }
-
-            // function sendMessage() {
-            //     var message = $('#userInput').val().trim();
-            //     if (message === '') return;
-
-            //     $('#chatWindow').append('<div class="chat-bubble chat-user">' + message + '</div>');
-
-            //     $.ajax({
-            //         url: '@Url.Action("GetResponse", "ChatBot")',
-            //         type: 'POST',
-            //         data: { UserMessage: message },
-            //         success: function (data) {
-            //             $('#chatWindow').append('<div class="chat-bubble chat-bot">' + data.responseMessage + '</div>');
-            //             $('#chatWindow').scrollTop($('#chatWindow')[0].scrollHeight);
-            //         },
-            //         error: function (xhr, status, error) {
-            //             console.error("Error:", error);
-            //         }
-            //     });
-
-            //     $('#userInput').val('');
-            // }
         });
 
-        //-----------------------------VoiceRecognaization-------------------------------------
-            $(document).ready(function () {
-            // Check for browser support
+        // Voice Recognition
+        $(document).ready(function () {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             let recognition;
 
@@ -222,21 +462,13 @@
                 recognition.interimResults = false;
                 recognition.maxAlternatives = 1;
 
-                // recognition.onstart = function () {
-                //     $('#voiceBtn i').removeClass('fa-microphone').addClass('fa-microphone-slash').css('color', 'red');
-                // };
-
-                // recognition.onend = function () {
-                //     $('#voiceBtn i').removeClass('fa-microphone-slash').addClass('fa-microphone').css('color', '');
-                // };
-
-                 recognition.onstart = function () {
-                $('#voiceBtn')
-                    .addClass('listening')
-                    .find('i')
-                    .removeClass('fa-microphone')
-                    .addClass('fa-microphone-slash');
-                 };
+                recognition.onstart = function () {
+                    $('#voiceBtn')
+                        .addClass('listening')
+                        .find('i')
+                        .removeClass('fa-microphone')
+                        .addClass('fa-microphone-slash');
+                };
 
                 recognition.onend = function () {
                     $('#voiceBtn')
@@ -249,7 +481,7 @@
                 recognition.onresult = function (event) {
                     const transcript = event.results[0][0].transcript;
                     $('#userInput').val(transcript);
-                    $('#sendBtn').click(); // auto-send after voice
+                    $('#sendBtn').click();
                 };
 
                 recognition.onerror = function (event) {
@@ -257,7 +489,6 @@
                     alert("Voice recognition error: " + event.error);
                 };
 
-                // Trigger recognition
                 $('#voiceBtn').click(function (e) {
                     e.preventDefault();
                     recognition.start();
@@ -267,17 +498,14 @@
                 console.warn("Speech recognition not supported in this browser.");
             }
         });
-        //-------------------------------------------------------------------------------------
 
-        //-------------------------------------------------DeepSeek----------------------------
-
-                $(document).ready(function () {
-            // On model selection
+        // DeepSeek AI Model Suggestions
+        $(document).ready(function () {
             $('#aiModel').on('change', function () {
                 const selectedModel = $(this).val();
 
-        if (selectedModel === 'deepseek' || selectedModel === 'chatgpt') {
-                            const suggestions = [
+                if (selectedModel === 'deepseek' || selectedModel === 'chatgpt') {
+                    const suggestions = [
                         "Do you want a summary of this record? Please Enter Record Name : ",
                         "Which record summary do you want to know? Please Enter Record Name : ",
                         "Show me the record summary for Record Name : "
@@ -297,18 +525,11 @@
                 }
             });
 
-            // When a suggestion is clicked
+            // Handle suggestion clicks
             $(document).on('click', '.suggestion', function () {
                 const suggestionText = $(this).text();
                 $('#userInput').val(suggestionText).focus();
             });
         });
-
-
-        
-        //-------------------------------------------------------------------------------------
-
-       
-
     </script>
 }

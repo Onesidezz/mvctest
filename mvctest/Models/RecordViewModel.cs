@@ -31,6 +31,7 @@ namespace mvctest.Models
     {
         public string FileName { get; set; }
         public byte[] File { get; set; }
+        public string? LocalDownloadPath { get; set; }
     }
     public class ContainerRecordsInfo
     {

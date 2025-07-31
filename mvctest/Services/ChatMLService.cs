@@ -22,7 +22,8 @@ namespace mvctest.Services
         private readonly AppSettings _settings;
         private readonly HttpClient _httpClient;
         private readonly IContentManager _contentManager;
-        private readonly string Prompt = "Give me short Summary  for the following content what actually this content is about in 5 sentance :\n\n";
+        private readonly string Prompt = "Summarize the following technical document by explaining only its main purpose and key functions. Avoid any step-by-step analysis or personal commentary. Focus purely on what the document is about and its intended use, in 3-5 concise sentences:\n\n";
+
 
         public ChatMLService(IOptions<AppSettings> options, HttpClient httpClient, IContentManager contentManager)
         {
@@ -207,8 +208,8 @@ namespace mvctest.Services
             {
                 fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
 
-                if (fileContent.Length > 10000)
-                    fileContent = fileContent.Substring(0, 10000) + "... [truncated]";
+                if (fileContent.Length > 100000)
+                    fileContent = fileContent.Substring(0, 100000) + "... [truncated]";
             }
             else if (!string.IsNullOrWhiteSpace(usermessage))
             {

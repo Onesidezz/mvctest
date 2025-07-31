@@ -8,6 +8,7 @@ namespace mvctest.Services
         void EnsureConnected();
         void ConnectDataBase(String dataSetId, String workGroupServerUrl);
         Record GetRecordByTitle(string title);
+        PaginatedResult<RecordViewModel> GetPaginatedRecords(string searchString, int page, int pageSize);
         List<RecordViewModel> GetAllRecords(string all);
         RecordViewModel GetRecordwithURI(int number);
         FileHandaler Download(int id);

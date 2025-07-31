@@ -1,0 +1,72 @@
+﻿@{
+    ViewData["Title"] = "Enhanced Search";
+}
+
+<style>
+    body {
+        background-color: #f9fafb;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .search-wrapper {
+        max-width: 600px;
+        margin: 80px auto;
+        background: #fff;
+        padding: 30px 40px;
+        border-radius: 10px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .search-title {
+        font-size: 24px;
+        font-weight: 600;
+        margin-bottom: 20px;
+        color: #1f2937;
+        text-align: center;
+    }
+
+    .search-form {
+        display: flex;
+        gap: 10px;
+    }
+
+    .search-input {
+        flex: 1;
+        padding: 12px 16px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 16px;
+        transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .search-input:focus {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+        outline: none;
+    }
+
+    .search-button {
+        background-color: #2563eb;
+        color: white;
+        padding: 12px 20px;
+        border: none;
+        border-radius: 6px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+    }
+
+    .search-button:hover {
+        background-color: #1e40af;
+    }
+</style>
+
+<div class="search-wrapper">
+    <h2 class="search-title">Search Records</h2>
+    
+    <form method="get" asp-action="SearchResults" asp-controller="ContentManager" class="search-form">
+        <input type="text" name="content" class="search-input" placeholder="Enter keyword..." />
+        <button type="submit" class="search-button">Search</button>
+    </form>
+</div>
+

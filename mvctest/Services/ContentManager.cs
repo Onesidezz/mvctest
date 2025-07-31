@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Options;
+﻿using DocumentFormat.OpenXml.Drawing;
+using Microsoft.Extensions.Options;
 using mvctest.Context;
 using mvctest.Models;
 using System.Data;
@@ -6,6 +7,7 @@ using System.Globalization;
 using System.Text;
 using TRIM.SDK;
 using static mvctest.Models.ChatBot;
+using Path = System.IO.Path;
 
 namespace mvctest.Services
 {
@@ -18,16 +20,16 @@ namespace mvctest.Services
         private static bool _isConnected = false;
         private string? datasetId = null;
         private string? workgroupUrl = null;
-
-        public ContentManager(IHttpContextAccessor httpContextAccessor, ContentManagerContext dbContext, IOptions<AppSettings> options)
+        private readonly ICachedCount _cachedCount;
+        public ContentManager(IHttpContextAccessor httpContextAccessor, ContentManagerContext dbContext, IOptions<AppSettings> options, ICachedCount cachedCount)
         {
             _httpContextAccessor = httpContextAccessor;
             _dbContext = dbContext;
             _settings = options.Value;
             datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
             //ConnectDataBase(_settings.DataSetID, _settings.WorkGroupUrl);
+            _cachedCount = cachedCount;
             EnsureConnected();
-
         }
         public void ConnectDataBase(String dataSetId, String workGroupServerUrl)
         {
@@ -112,6 +114,242 @@ namespace mvctest.Services
             }
 
         }
+        public PaginatedResult<RecordViewModel> GetPaginatedRecords(string searchString, int page, int pageSize)
+        {
+            // For wildcard searches, use estimated count or skip total count entirely
+            int totalRecords = 0;
+            bool useEstimatedCount = (searchString == "*" || string.IsNullOrWhiteSpace(searchString));
+
+            if (useEstimatedCount)
+            {
+                // Option 1: Use a reasonable estimate (update this value periodically)
+                totalRecords = GetEstimatedTotalRecords();
+
+                // Option 2: Or calculate total only when specifically needed
+                // totalRecords = -1; // Indicates "unknown" - handle in UI
+            }
+            else
+            {
+                // For specific searches, get accurate count (should be much smaller dataset)
+                totalRecords = _cachedCount.GetTotalRecordCountCached(searchString,database);
+            }
+
+            // Get paginated results using TRIM SDK pagination
+            TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
+
+            if (useEstimatedCount)
+            {
+                search.SetSearchString($"typedTitle:{searchString}");
+            }
+
+            search.PagingMode = true;
+            long skip = (page - 1) * pageSize;
+            search.SkipCount = skip;
+            search.LimitOnRowsReturned = pageSize;
+            search.SetSortString("DateCreated");
+
+            var listOfRecords = new List<RecordViewModel>();
+            var containerRecordsInfoList = new List<ContainerRecordsInfo>();
+            var processedContainerIds = new HashSet<long>();
+
+            // Process only the paginated records
+            foreach (Record record in search)
+            {
+                bool isContainer = !string.IsNullOrWhiteSpace(record.Contents?.Trim());
+
+                var viewModel = new RecordViewModel
+                {
+                    URI = record.Uri.Value,
+                    Title = record.Title,
+                    Container = record.Container?.Name ?? "",
+                    AllParts = record.AllParts ?? "",
+                    Assignee = record.Assignee?.Name ?? "",
+                    DateCreated = record.DateCreated.ToShortDateString(),
+                    IsContainer = isContainer ? "Container" : "Document File",
+                    ContainerCount = isContainer ? new Dictionary<string, long>() : null,
+                    ACL = record.AccessControlList
+                };
+
+                listOfRecords.Add(viewModel);
+
+                if (isContainer && !processedContainerIds.Contains(record.Uri.Value))
+                {
+                    processedContainerIds.Add(record.Uri.Value);
+                    _cachedCount.ProcessContainerRecord(record, viewModel, listOfRecords, containerRecordsInfoList,database);
+                }
+            }
+
+            // If we got fewer records than pageSize, we might be at the end
+            if (useEstimatedCount && listOfRecords.Count < pageSize)
+            {
+                // Adjust the total count estimate based on current page
+                totalRecords = ((page - 1) * pageSize) + listOfRecords.Count;
+            }
+
+            if (listOfRecords.Any())
+            {
+                listOfRecords[0].containerRecordsInfo = containerRecordsInfoList;
+                listOfRecords[0].Totalrecords = totalRecords;
+            }
+
+            return new PaginatedResult<RecordViewModel>
+            {
+                Records = listOfRecords,
+                TotalRecords = totalRecords
+            };
+        }
+
+        private int GetEstimatedTotalRecords()
+        {
+          
+            return _settings.EstimatedRecordCount != null
+                ? _settings.EstimatedRecordCount
+                : 25000; // Default estimate
+        }
+
+        private int EstimateCountBySampling()
+        {
+          
+            TrimMainObjectSearch sampleSearch = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
+            sampleSearch.LimitOnRowsReturned = 100;
+
+            int sampleCount = 0;
+            DateTime? firstDate = null;
+            DateTime? lastDate = null;
+
+            foreach (Record record in sampleSearch)
+            {
+                sampleCount++;
+                if (firstDate == null) firstDate = record.DateCreated;
+                lastDate = record.DateCreated;
+            }
+
+            if (sampleCount == 100 && firstDate.HasValue && lastDate.HasValue)
+            {
+                // Very rough estimation based on date range
+                // This is just an example - you'd need better logic
+                var totalDays = (DateTime.Now - firstDate.Value).TotalDays;
+                var sampleDays = (lastDate.Value - firstDate.Value).TotalDays;
+
+                if (sampleDays > 0)
+                {
+                    return (int)((sampleCount / sampleDays) * totalDays);
+                }
+            }
+
+            return sampleCount > 0 ? sampleCount * 250 : 25000; // Rough estimate
+        }
+        //public PaginatedResult<RecordViewModel> GetPaginatedRecords(string searchString, int page, int pageSize)
+        //{
+        //    TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
+        //    search.SetSearchString($"typedTitle:{searchString}");
+        //    //search.SetSortString("DateCreated");
+
+        //    var listOfRecords = new List<RecordViewModel>();
+        //    var containerRecordsInfoList = new List<ContainerRecordsInfo>();
+
+        //    // First pass: Get all records and build the complete list
+        //    foreach (Record record in search)
+        //    {
+        //        bool isContainer = !string.IsNullOrWhiteSpace(record.Contents?.Trim());
+
+        //        var viewModel = new RecordViewModel
+        //        {
+        //            URI = record.Uri.Value,
+        //            Title = record.Title,
+        //            Container = record.Container?.Name ?? "",
+        //            AllParts = record.AllParts ?? "",
+        //            Assignee = record.Assignee?.Name ?? "",
+        //            DateCreated = record.DateCreated.ToShortDateString(),
+        //            IsContainer = isContainer ? "Container" : "Document File",
+        //            ContainerCount = isContainer ? new Dictionary<string, long>() : null,
+        //            ACL = record.AccessControlList
+        //        };
+
+        //        listOfRecords.Add(viewModel);
+
+        //        if (isContainer)
+        //        {
+        //            var contentLines = record.Contents
+        //                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+
+        //            var containerName = record.Title;
+        //            var containerRecordNested = new ContainerRecordsInfo
+        //            {
+        //                ContainerName = containerName
+        //            };
+
+        //            if (viewModel.ContainerCount == null)
+        //            {
+        //                viewModel.ContainerCount = new Dictionary<string, long>();
+        //            }
+
+        //            viewModel.ContainerCount[containerName] = contentLines.Length;
+
+        //            foreach (var line in contentLines)
+        //            {
+        //                var parts = line.Split(':');
+        //                string nestedTitle = parts.Length > 1 ? parts[1].Trim() : line.Trim();
+        //                containerRecordNested.ChildTitles.Add(nestedTitle);
+
+        //                var nestedRecord = GetRecordByTitle(nestedTitle);
+
+        //                if (nestedRecord != null)
+        //                {
+        //                    listOfRecords.Add(new RecordViewModel
+        //                    {
+        //                        URI = nestedRecord.Uri.Value,
+        //                        Title = nestedRecord.Title,
+        //                        Container = record.Title,
+        //                        AllParts = nestedRecord.AllParts ?? "",
+        //                        Assignee = nestedRecord.Assignee?.Name ?? "",
+        //                        DateCreated = nestedRecord.DateCreated.ToShortDateString(),
+        //                        IsContainer = "Child Document",
+        //                        ACL = nestedRecord.AccessControlList
+        //                    });
+        //                }
+        //                else
+        //                {
+        //                    listOfRecords.Add(new RecordViewModel
+        //                    {
+        //                        URI = 0,
+        //                        Title = nestedTitle,
+        //                        Container = record.Title,
+        //                        AllParts = "",
+        //                        Assignee = database.CurrentUser.Name,
+        //                        DateCreated = DateTime.Now.ToShortDateString(),
+        //                        IsContainer = "Child (Unresolved)",
+        //                        ACL = record.AccessControlList
+        //                    });
+        //                }
+        //            }
+
+        //            containerRecordsInfoList.Add(containerRecordNested);
+        //        }
+        //    }
+
+        //    // Get total count
+        //    int totalRecords = listOfRecords.Count;
+
+        //    // Apply pagination
+        //    var paginatedRecords = listOfRecords
+        //        .Skip((page - 1) * pageSize)
+        //        .Take(pageSize)
+        //        .ToList();
+
+        //    // Set container info on first record if exists
+        //    if (paginatedRecords.Any())
+        //    {
+        //        paginatedRecords[0].containerRecordsInfo = containerRecordsInfoList;
+        //        paginatedRecords[0].Totalrecords = totalRecords;
+        //    }
+
+        //    return new PaginatedResult<RecordViewModel>
+        //    {
+        //        Records = paginatedRecords,
+        //        TotalRecords = totalRecords
+        //    };
+        //}
         public List<RecordViewModel> GetAllRecords(string all)
         {
             TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
@@ -213,93 +451,7 @@ namespace mvctest.Services
 
             return listOfRecords;
         }
-        //public List<RecordViewModel> GetAllRecords(string all)
-        //{
-        //    TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
-        //    search.SetSearchString($"typedTitle:{all}");
-
-        //    var listOfRecords = new List<RecordViewModel>();
-
-        //    foreach (Record record in search)
-        //    {
-        //        bool isContainer = !string.IsNullOrWhiteSpace(record.Contents?.Trim());
-        //       
-        //        var viewModel = new RecordViewModel
-        //        {
-        //            URI = record.Uri.Value,
-        //            Title = record.Title,
-        //            Container = record.Container?.Name ?? "",
-        //            AllParts = record.AllParts ?? "",
-        //            Assignee = record.Assignee?.Name ?? "",
-        //            DateCreated = record.DateCreated.ToShortDateString(),
-        //            IsContainer = isContainer ? "Container" : "Document File",
-        //            ContainerCount = isContainer ? new Dictionary<string, long>() : null,
-        //            ACL = record.AccessControlList
-
-        //        };
-        //        listOfRecords.Add(viewModel);
-
-        //        if (isContainer)
-        //        {
-        //            var contentLines = record.Contents
-        //                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-
-        //            var containerName = record.Title;
-        //            var cointainerRecordNested = new ContainerRecordsInfo()
-        //            {
-        //                ContainerName = containerName,
-        //            };
-
-        //            viewModel.ContainerCount[containerName] = contentLines.Length;
-
-        //            foreach (var line in contentLines)
-        //            {
-        //                var parts = line.Split(':');
-        //                string nestedTitle = parts.Length > 1 ? parts[1].Trim() : line.Trim();
-        //                cointainerRecordNested.ChildTitles.Add(nestedTitle);
-
-        //                var nestedRecord = GetRecordByTitle(nestedTitle);
-
-        //                if (nestedRecord != null)
-        //                {
-        //                    listOfRecords.Add(new RecordViewModel
-        //                    {
-        //                        URI = nestedRecord.Uri.Value,
-        //                        Title = nestedRecord.Title,
-        //                        Container = record.Title,
-        //                        AllParts = nestedRecord.AllParts ?? "",
-        //                        Assignee = nestedRecord.Assignee?.Name ?? "",
-        //                        DateCreated = nestedRecord.DateCreated.ToShortDateString(),
-        //                        IsContainer = "Child Document",
-        //                        ACL = record.AccessControlList
-        //                    });
-        //                }
-        //                else
-        //                {
-        //                    listOfRecords.Add(new RecordViewModel
-        //                    {
-        //                        URI = 0,
-        //                        Title = nestedTitle,
-        //                        Container = record.Title,
-        //                        AllParts = "",
-        //                        Assignee = database.CurrentUser.Name,
-        //                        DateCreated = DateTime.Now.ToShortDateString(),
-        //                        IsContainer = "Child (Unresolved)",
-        //                        ACL = record.AccessControlList
-
-        //                    });
-        //                }
-        //            }
-        //        }
-
-        //    }
-        //    listOfRecords.FirstOrDefault().containerRecordsInfo = cointainerRecordNested;
-        //    if (listOfRecords.Any())
-        //    {
-        //        listOfRecords[0].Totalrecords = listOfRecords.Count;
-        //    }
-        //    return listOfRecords;
-        //}
+ 
         public Record GetRecordByTitle(string title)
         {
             TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
@@ -348,6 +500,11 @@ namespace mvctest.Services
             {
                 var filehandeler = new FileHandaler();
                 Record record = new Record(database, id);
+                if (!record.IsElectronic)
+                {
+                    Console.WriteLine($"Record with ID {id} does not have an electronic document.");
+                    return null; // Or return filehandeler with empty fields if preferred
+                }
                 string outputPath = @"C:\Temp\Download\" + record.Title + Path.GetExtension(record.Extension);
                 string fileName = record.Title + Path.GetExtension(record.Extension);
 
@@ -360,6 +517,7 @@ namespace mvctest.Services
                 var bytesdata = System.IO.File.ReadAllBytes(savedPath);
                 filehandeler.File = bytesdata;
                 filehandeler.FileName = fileName;
+                filehandeler.LocalDownloadPath = outputPath;
                 return filehandeler;
             }
             catch (Exception ex)
@@ -398,8 +556,46 @@ namespace mvctest.Services
             return false;
         }
 
+
+        public void AddRecordRelationship(string recordNumberA, string recordNumberB, RecordRelationshipType relationshipType)
+        {
+            try
+            {
+                // Load the two records
+                Record recordA = new Record(database, recordNumberA);
+                Record recordB = new Record(database, recordNumberB);
+
+                // Add relationship: recordA.RelateTo(recordB, relationshipType);
+                recordA.AttachRelationship(recordB, relationshipType);
+
+                //// Add a 'Copy Of' relationship (temp copy)
+                AddRecordRelationship("DOC1001", "DOC1002", RecordRelationshipType.IsTempCopy);
+
+                //// Add a 'Supersedes' relationship
+                //AddRecordRelationship("DOC1003", "DOC1004", RecordRelationshipType.DoesSupersede);
+
+
+                // Save the changes to recordA
+                recordA.Save();
+
+                Console.WriteLine($"Successfully added relationship '{relationshipType}' between {recordNumberA} and {recordNumberB}");
+
+            }
+            catch (TrimException ex)
+            {
+                Console.WriteLine($"Error creating relationship: {ex.Message}");
+            }
+            finally
+            {
+
+            }
+        }
+
+
         public void GenerateChatTrainingDataCsv(List<RecordViewModel> records, string filePath)
         {
+            Console.WriteLine("Inside GenerateChatTrainingDataCsv function");
+
             var trainingData = new List<ChatData>();
             // Static greetings/intents
             trainingData.AddRange(new[]
@@ -550,141 +746,163 @@ namespace mvctest.Services
         }
         public void AppendAdvancedChatTrainingData(List<RecordViewModel> records, string filePath)
         {
-            var trainingData = new List<ChatData>();
+            Console.WriteLine("Inside AppendAdvancedChatTrainingData function");
 
-           
-
-            // 2. Date range simulation (basic)
-            // ✅ 2. Date range combinations with counts and titles
-            var validDateRecords = records
-                .Where(r => DateTime.TryParse(r.DateCreated, out _))
-                .Select(r => new
-                {
-                    Record = r,
-                    ParsedDate = DateTime.Parse(r.DateCreated!)
-                })
-                .OrderBy(r => r.ParsedDate)
-                .ToList();
-
-            for (int i = 0; i < validDateRecords.Count; i++)
+            try
             {
-                for (int j = i; j < validDateRecords.Count; j++) // allow j == i
+                // Safe date parsing and ordering
+                var validDateRecords = new List<(RecordViewModel Record, DateTime ParsedDate)>();
+                foreach (var r in records)
                 {
-                    var start = validDateRecords[i].ParsedDate;
-                    var end = validDateRecords[j].ParsedDate;
-
-                    var inRange = validDateRecords
-                        .Where(r => r.ParsedDate >= start && r.ParsedDate <= end)
-                        .Select(r => r.Record)
-                        .ToList();
-
-                    if (inRange.Count < 1) continue;
-
-                    string rangeText = $"{start:MM/dd/yyyy} to {end:MM/dd/yyyy}";
-                    string recordList = string.Join(" ", inRange.Select((r, index) => $"{index + 1}. {r.Title?.Trim()}"));
-                    string label = $"There are {inRange.Count} records created between {rangeText} including: {recordList}";
-
-                    var prompts = new[]
+                    if (DateTime.TryParse(r.DateCreated, out var parsedDate))
                     {
-            $"Show records between {rangeText}",
-        };
-
-                    foreach (var prompt in prompts)
+                        validDateRecords.Add((r, parsedDate));
+                    }
+                    else
                     {
-                        trainingData.Add(new ChatData
-                        {
-                            Text = prompt,
-                            Label = label
-                        });
+                        Console.WriteLine($"Invalid DateCreated: {r.DateCreated}");
                     }
                 }
-            }
 
+                validDateRecords = validDateRecords.OrderBy(r => r.ParsedDate).ToList();
 
-            Console.WriteLine($"Count of Date {trainingData.Count}");
+                int trainingCount = 0;
 
-
-            // 1. Multi-entity training: queries involving multiple fields
-            foreach (var record in records)
-            {
-                if (!string.IsNullOrWhiteSpace(record.Assignee) &&
-                    !string.IsNullOrWhiteSpace(record.Container) &&
-                    !string.IsNullOrWhiteSpace(record.Title))
+                // Open stream once and write directly
+                using (var stream = new StreamWriter(filePath, true, Encoding.UTF8))
+                using (var csv = new CsvHelper.CsvWriter(stream, CultureInfo.InvariantCulture))
                 {
-                    string name = record.Title.Trim();
-                    string container = record.Container.Trim();
-                    string assignee = record.Assignee.Trim();
-                    string date = record.DateCreated?.Trim() ?? "unknown date";
-                    string type = record.IsContainer?.Trim() ?? "unknown";
-
-                    trainingData.Add(new ChatData
+                    // Date range-based training data (streamed)
+                    for (int i = 0; i < validDateRecords.Count; i++)
                     {
-                        Text = $"Find files in {container} by {assignee}",
-                        Label = $"{container} has files owned by {assignee}, including {name}."
-                    });
+                        for (int j = i; j < validDateRecords.Count; j++)
+                        {
+                            var start = validDateRecords[i].ParsedDate;
+                            var end = validDateRecords[j].ParsedDate;
 
-                    trainingData.Add(new ChatData
+                            var inRange = validDateRecords
+                                .Where(r => r.ParsedDate >= start && r.ParsedDate <= end)
+                                .Select(r => r.Record)
+                                .ToList();
+
+                            if (inRange.Count < 1) continue;
+
+                            string rangeText = $"{start:MM/dd/yyyy} to {end:MM/dd/yyyy}";
+                            string recordList = string.Join(" ", inRange.Select((r, index) => $"{index + 1}. {r.Title?.Trim()}"));
+                            string label = $"There are {inRange.Count} records created between {rangeText} including: {recordList}";
+
+                            csv.WriteRecord(new ChatData
+                            {
+                                Text = $"Show records between {rangeText}",
+                                Label = label
+                            });
+                            csv.NextRecord();
+                            trainingCount++;
+
+                            if (trainingCount % 1000 == 0)
+                                Console.WriteLine($"Written training data count: {trainingCount}");
+                        }
+                    }
+
+                    Console.WriteLine($"Date range training entries written: {trainingCount}");
+
+                    // Multi-entity queries
+                    foreach (var record in records)
                     {
-                        Text = $"Which items in {container} are assigned to {assignee}?",
-                        Label = $"{container} includes {name}, which is assigned to {assignee}."
-                    });
+                        if (!string.IsNullOrWhiteSpace(record.Assignee) &&
+                            !string.IsNullOrWhiteSpace(record.Container) &&
+                            !string.IsNullOrWhiteSpace(record.Title))
+                        {
+                            string name = record.Title.Trim();
+                            string container = record.Container.Trim();
+                            string assignee = record.Assignee.Trim();
+                            string type = record.IsContainer?.Trim() ?? "unknown";
 
-                    trainingData.Add(new ChatData
+                            var multiEntityData = new[]
+                            {
+                        new ChatData { Text = $"Find files in {container} by {assignee}", Label = $"{container} has files owned by {assignee}, including {name}." },
+                        new ChatData { Text = $"Which items in {container} are assigned to {assignee}?", Label = $"{container} includes {name}, which is assigned to {assignee}." },
+                        new ChatData { Text = $"Show me {type}s by {assignee} from {container}", Label = $"{name} is a {type} from {container} owned by {assignee}." }
+                    };
+
+                            foreach (var item in multiEntityData)
+                            {
+                                csv.WriteRecord(item);
+                                csv.NextRecord();
+                                trainingCount++;
+                            }
+                        }
+                    }
+
+                    // Fuzzy synonyms
+                    var synonyms = new[] { "docs", "documents", "files", "entries", "items", "records" };
+                    foreach (var word in synonyms)
                     {
-                        Text = $"Show me {type}s by {assignee} from {container}",
-                        Label = $"{name} is a {type} from {container} owned by {assignee}."
-                    });
-                }
-            }
+                        var items = new[]
+                        {
+                    new ChatData { Text = $"How many {word} do we have?", Label = $"There are {records.Count} records in total." },
+                    new ChatData { Text = $"Show {word} in HR", Label = $"Searching {word} in HR container." }
+                };
 
-            // 3. Fuzzy synonyms
-            var synonyms = new[] { "docs", "documents", "files", "entries", "items", "records" };
-            foreach (var word in synonyms)
-            {
-                trainingData.Add(new ChatData
-                {
-                    Text = $"How many {word} do we have?",
-                    Label = $"There are {records.Count} records in total."
-                });
+                        foreach (var item in items)
+                        {
+                            csv.WriteRecord(item);
+                            csv.NextRecord();
+                            trainingCount++;
+                        }
+                    }
 
-                trainingData.Add(new ChatData
-                {
-                    Text = $"Show {word} in HR",
-                    Label = $"Searching {word} in HR container."
-                });
-            }
-
-            // 4. Contextual/follow-up queries
-            trainingData.AddRange(new[]
-            {
+                    // Contextual queries
+                    var contextItems = new[]
+                    {
                 new ChatData { Text = "What about yesterday's records?", Label = "Filtering by yesterday’s created date..." },
                 new ChatData { Text = "Any recent files?", Label = "Here are the latest records based on creation date." },
                 new ChatData { Text = "Remind me of the Finance container", Label = "Finance container has multiple items including..." },
                 new ChatData { Text = "Who owns the last record?", Label = "The last record is assigned to ..." }
-            });
-            var advancetraning = new AdvancedTrainingDataGenerator();
-            //trainingData.AddRange(advancetraning.GenerateLabelBasedTraining(records));
-            trainingData.AddRange(advancetraning.GenerateContextualTraining(records));
-            trainingData.AddRange(advancetraning.GenerateComplexQueryTraining(records));
-            trainingData.AddRange(advancetraning.GenerateFuzzyMatchingTraining(records));
-            trainingData.AddRange(advancetraning.GenerateMultiEntityTraining(records));
-            trainingData.AddRange(advancetraning.GenerateTimeBasedTraining(records));
-            trainingData.AddRange(advancetraning.GenerateWorkflowTraining(records));
-            trainingData.AddRange(advancetraning.GenerateRangeQueries(records));
+            };
 
-            // 5. Writing (append to same CSV)
-            using (var stream = new StreamWriter(filePath, true, Encoding.UTF8))
-            using (var csv = new CsvHelper.CsvWriter(stream, CultureInfo.InvariantCulture))
-            {
-                foreach (var item in trainingData)
-                {
-                    csv.WriteRecord(item);
-                    csv.NextRecord();
-                }
+                    foreach (var item in contextItems)
+                    {
+                        csv.WriteRecord(item);
+                        csv.NextRecord();
+                        trainingCount++;
+                    }
+
+                    // Advanced training generation
+                    try
+                    {
+                        var advancetraning = new AdvancedTrainingDataGenerator();
+                        var advancedData = new List<ChatData>();
+                        advancedData.AddRange(advancetraning.GenerateContextualTraining(records));
+                        advancedData.AddRange(advancetraning.GenerateComplexQueryTraining(records));
+                        advancedData.AddRange(advancetraning.GenerateFuzzyMatchingTraining(records));
+                        advancedData.AddRange(advancetraning.GenerateMultiEntityTraining(records));
+                        advancedData.AddRange(advancetraning.GenerateTimeBasedTraining(records));
+                        advancedData.AddRange(advancetraning.GenerateWorkflowTraining(records));
+                        advancedData.AddRange(advancetraning.GenerateRangeQueries(records));
+
+                        foreach (var item in advancedData)
+                        {
+                            csv.WriteRecord(item);
+                            csv.NextRecord();
+                            trainingCount++;
+                        }
+
+                        Console.WriteLine("Advanced training data generated and written.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error in advanced training generation: {ex.Message}");
+                    }
+                } // End of using stream/csv
+
+                Console.WriteLine($"Total training records written: {trainingCount}");
+                Console.WriteLine($"Appended advanced training data to: {filePath}");
             }
-            Console.WriteLine($"Dates COmbinations created : {trainingData.Count}");
-
-            Console.WriteLine($"Appended advanced training data to: {filePath}");
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Fatal error in AppendAdvancedChatTrainingData: {ex.Message}");
+            }
         }
 
 

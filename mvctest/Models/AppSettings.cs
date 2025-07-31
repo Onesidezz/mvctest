@@ -10,6 +10,9 @@
         public string DeepseekApiKey { get; set; }
         public string ChatGptApiKey { get; set; }
         public string TrainedModelPathSummarize { get; set; }
+        public int EstimatedRecordCount { get; set; }
+        public string FolderDirectory { get; set; }
+        public string IndexDirectory { get; set; }
 
     }
 }

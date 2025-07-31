@@ -1,5 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
+﻿using DocumentFormat.OpenXml.Drawing;
+using Microsoft.AspNetCore.Mvc;
 using mvctest.Models;
 using mvctest.Services;
 using System.IO.Compression;
@@ -8,18 +8,30 @@ namespace mvctest.Controllers
 {
     public class ContentManagerController : Controller
     {
+        private readonly ILuceneInterface _luceneInterface;
         private readonly IContentManager _contentManager;
-        public ContentManagerController(IContentManager contentManager)
+        public ContentManagerController(IContentManager contentManager, ILuceneInterface luceneInterface)
         {
             _contentManager = contentManager;
+            _luceneInterface = luceneInterface;
         }
 
-        public IActionResult Index()
+        public IActionResult Index(int page = 1, int pageSize = 10)
         {
             try
             {
-                var list = _contentManager.GetAllRecords("*");
-                return View(list);
+                // Get paginated records directly from backend
+                var paginatedResult = _contentManager.GetPaginatedRecords("*", page, pageSize);
+
+                var viewModel = new PaginatedRecordViewModel
+                {
+                    Records = paginatedResult.Records,
+                    CurrentPage = page,
+                    PageSize = pageSize,
+                    TotalRecords = paginatedResult.TotalRecords
+                };
+
+                return View(viewModel);
             }
             catch (Exception ex)
             {
@@ -27,6 +39,7 @@ namespace mvctest.Controllers
                 return RedirectToAction("Error", "Home", new { message = ex.Message });
             }
         }
+     
         public IActionResult Create()
         {
             return View();
@@ -144,7 +157,46 @@ namespace mvctest.Controllers
                 return RedirectToAction("Error", "Home", new { message = ex.Message });
             }
         }
-        
+
+        [HttpGet]
+        public IActionResult IndexSearch()
+        {
+            try
+            {
+              var records =  _contentManager.GetAllRecords("*");
+                var allFiles = new List<string>();
+                foreach (var recRecord in records)
+                {
+                  var data =  _contentManager.Download(Convert.ToInt32(recRecord.URI));
+                    allFiles.Add(data.LocalDownloadPath);
+
+                }
+                _luceneInterface.BatchIndexFilesFromContentManager(allFiles);
+                return View();
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = $"Failed to IndexSearch Because {ex.Message}";
+                return RedirectToAction("Error", "Home", new { message = ex.Message });
+            }
+        }
+
+        public IActionResult SearchResults(string content)
+        {
+            try
+            {
+                var searchResults = _luceneInterface.SearchFiles(content);
+                return View(searchResults); // Pass list to the view
+            }
+            catch (Exception ex)
+            {
+                TempData["ErrorMessage"] = $"Search failed: {ex.Message}";
+                return RedirectToAction("Error", "Home", new { message = ex.Message });
+            }
+        }
+
+
+
 
 
     }
