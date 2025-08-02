@@ -12,5 +12,7 @@ namespace mvctest.Services
         void ShowIndexStats();
         void CleanupLucene();
         void BatchIndexFilesFromContentManager(List<string> directories);
+        void CommitIndex();
+
     }
 }

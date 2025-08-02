@@ -1,5 +1,4 @@
-﻿using DocumentFormat.OpenXml.Drawing;
-using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Options;
 using mvctest.Context;
 using mvctest.Models;
 using System.Data;
@@ -21,18 +20,25 @@ namespace mvctest.Services
         private string? datasetId = null;
         private string? workgroupUrl = null;
         private readonly ICachedCount _cachedCount;
-        public ContentManager(IHttpContextAccessor httpContextAccessor, ContentManagerContext dbContext, IOptions<AppSettings> options, ICachedCount cachedCount)
+        private readonly ILuceneInterface _luceneInterface;
+        private string _storedDatasetId;
+        private string _storedWorkgroupUrl;
+        public ContentManager(IHttpContextAccessor httpContextAccessor, ContentManagerContext dbContext, IOptions<AppSettings> options, ICachedCount cachedCount, ILuceneInterface luceneInterface)
         {
             _httpContextAccessor = httpContextAccessor;
             _dbContext = dbContext;
             _settings = options.Value;
-            datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
-            //ConnectDataBase(_settings.DataSetID, _settings.WorkGroupUrl);
-            _cachedCount = cachedCount;
+            _luceneInterface = luceneInterface;
             EnsureConnected();
+
         }
-        public void ConnectDataBase(String dataSetId, String workGroupServerUrl)
+        public void ConnectDataBase(string dataSetId, string workGroupServerUrl)
         {
+            // Store connection details for later use
+            _storedDatasetId = dataSetId;
+            _storedWorkgroupUrl = workGroupServerUrl;
+
+            // Create connection for current thread
             database = new Database()
             {
                 Id = dataSetId,
@@ -40,15 +46,44 @@ namespace mvctest.Services
             };
             database.Connect();
         }
+        public Database CreateNewDatabaseConnection()
+        {
+            if (string.IsNullOrEmpty(_storedDatasetId) || string.IsNullOrEmpty(_storedWorkgroupUrl))
+            {
+                throw new InvalidOperationException("Database connection details not available");
+            }
+
+            var newDatabase = new Database()
+            {
+                Id = _storedDatasetId,
+                WorkgroupServerURL = _storedWorkgroupUrl
+            };
+            newDatabase.Connect();
+
+            return newDatabase;
+        }
+        public void StoreConnectionDetails(string dataSetId, string workGroupServerUrl)
+        {
+            _storedDatasetId = dataSetId;
+            _storedWorkgroupUrl = workGroupServerUrl;
+        }
+        
 
         public void EnsureConnected()
         {
-            datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
-            workgroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl");
-            if (datasetId != null && workgroupUrl != null)
+            if (database != null) return;
+
+            var datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
+            var workgroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl");
+
+            if (!string.IsNullOrEmpty(datasetId) && !string.IsNullOrEmpty(workgroupUrl))
             {
-                if (database != null) return;
-                ConnectDataBase(datasetId, workgroupUrl);
+                database = new Database()
+                {
+                    Id = datasetId,
+                    WorkgroupServerURL = workgroupUrl
+                };
+                database.Connect();
             }
         }
 
@@ -124,9 +159,6 @@ namespace mvctest.Services
             {
                 // Option 1: Use a reasonable estimate (update this value periodically)
                 totalRecords = GetEstimatedTotalRecords();
-
-                // Option 2: Or calculate total only when specifically needed
-                // totalRecords = -1; // Indicates "unknown" - handle in UI
             }
             else
             {
@@ -175,7 +207,7 @@ namespace mvctest.Services
                 if (isContainer && !processedContainerIds.Contains(record.Uri.Value))
                 {
                     processedContainerIds.Add(record.Uri.Value);
-                    _cachedCount.ProcessContainerRecord(record, viewModel, listOfRecords, containerRecordsInfoList,database);
+                    //_cachedCount.ProcessContainerRecord(record, viewModel, listOfRecords, containerRecordsInfoList,database);
                 }
             }
 
@@ -239,117 +271,7 @@ namespace mvctest.Services
 
             return sampleCount > 0 ? sampleCount * 250 : 25000; // Rough estimate
         }
-        //public PaginatedResult<RecordViewModel> GetPaginatedRecords(string searchString, int page, int pageSize)
-        //{
-        //    TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
-        //    search.SetSearchString($"typedTitle:{searchString}");
-        //    //search.SetSortString("DateCreated");
-
-        //    var listOfRecords = new List<RecordViewModel>();
-        //    var containerRecordsInfoList = new List<ContainerRecordsInfo>();
-
-        //    // First pass: Get all records and build the complete list
-        //    foreach (Record record in search)
-        //    {
-        //        bool isContainer = !string.IsNullOrWhiteSpace(record.Contents?.Trim());
-
-        //        var viewModel = new RecordViewModel
-        //        {
-        //            URI = record.Uri.Value,
-        //            Title = record.Title,
-        //            Container = record.Container?.Name ?? "",
-        //            AllParts = record.AllParts ?? "",
-        //            Assignee = record.Assignee?.Name ?? "",
-        //            DateCreated = record.DateCreated.ToShortDateString(),
-        //            IsContainer = isContainer ? "Container" : "Document File",
-        //            ContainerCount = isContainer ? new Dictionary<string, long>() : null,
-        //            ACL = record.AccessControlList
-        //        };
-
-        //        listOfRecords.Add(viewModel);
-
-        //        if (isContainer)
-        //        {
-        //            var contentLines = record.Contents
-        //                .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-
-        //            var containerName = record.Title;
-        //            var containerRecordNested = new ContainerRecordsInfo
-        //            {
-        //                ContainerName = containerName
-        //            };
-
-        //            if (viewModel.ContainerCount == null)
-        //            {
-        //                viewModel.ContainerCount = new Dictionary<string, long>();
-        //            }
-
-        //            viewModel.ContainerCount[containerName] = contentLines.Length;
-
-        //            foreach (var line in contentLines)
-        //            {
-        //                var parts = line.Split(':');
-        //                string nestedTitle = parts.Length > 1 ? parts[1].Trim() : line.Trim();
-        //                containerRecordNested.ChildTitles.Add(nestedTitle);
-
-        //                var nestedRecord = GetRecordByTitle(nestedTitle);
-
-        //                if (nestedRecord != null)
-        //                {
-        //                    listOfRecords.Add(new RecordViewModel
-        //                    {
-        //                        URI = nestedRecord.Uri.Value,
-        //                        Title = nestedRecord.Title,
-        //                        Container = record.Title,
-        //                        AllParts = nestedRecord.AllParts ?? "",
-        //                        Assignee = nestedRecord.Assignee?.Name ?? "",
-        //                        DateCreated = nestedRecord.DateCreated.ToShortDateString(),
-        //                        IsContainer = "Child Document",
-        //                        ACL = nestedRecord.AccessControlList
-        //                    });
-        //                }
-        //                else
-        //                {
-        //                    listOfRecords.Add(new RecordViewModel
-        //                    {
-        //                        URI = 0,
-        //                        Title = nestedTitle,
-        //                        Container = record.Title,
-        //                        AllParts = "",
-        //                        Assignee = database.CurrentUser.Name,
-        //                        DateCreated = DateTime.Now.ToShortDateString(),
-        //                        IsContainer = "Child (Unresolved)",
-        //                        ACL = record.AccessControlList
-        //                    });
-        //                }
-        //            }
-
-        //            containerRecordsInfoList.Add(containerRecordNested);
-        //        }
-        //    }
-
-        //    // Get total count
-        //    int totalRecords = listOfRecords.Count;
-
-        //    // Apply pagination
-        //    var paginatedRecords = listOfRecords
-        //        .Skip((page - 1) * pageSize)
-        //        .Take(pageSize)
-        //        .ToList();
-
-        //    // Set container info on first record if exists
-        //    if (paginatedRecords.Any())
-        //    {
-        //        paginatedRecords[0].containerRecordsInfo = containerRecordsInfoList;
-        //        paginatedRecords[0].Totalrecords = totalRecords;
-        //    }
-
-        //    return new PaginatedResult<RecordViewModel>
-        //    {
-        //        Records = paginatedRecords,
-        //        TotalRecords = totalRecords
-        //    };
-        //}
+       
         public List<RecordViewModel> GetAllRecords(string all)
         {
             TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
@@ -958,7 +880,29 @@ namespace mvctest.Services
 
 
         }
+        public Classification GetClassification(string ClassificationName)
+        {
+            TrimMainObjectSearch filePlanSearch = new TrimMainObjectSearch(database, BaseObjectTypes.Classification);
+            TrimSearchClause searchClause = new TrimSearchClause(database, BaseObjectTypes.Classification, SearchClauseIds.ClassificationTitle);
+            searchClause.SetCriteriaFromString(ClassificationName.Replace(",", "\\,").Replace("\"", "\\\""));
+            filePlanSearch.AddSearchClause(searchClause);
 
+            //log.Info("Fast Count: " + filePlanSearch.Count);
+
+            if (filePlanSearch.FastCount > 0)
+            {
+                foreach (Classification classification in filePlanSearch)
+                {
+                    //log.Info("Classification Title: " + classification.Title);
+                    //log.Info("Classification Name: " + classification.Name);
+                    Console.WriteLine(classification.PossiblyHasSubordinates);
+
+                    return classification;
+                }
+            }
+
+            return null;
+        }
         public bool CreateRecord(CreateRecord records)
         {
             try
@@ -980,6 +924,13 @@ namespace mvctest.Services
                 return false;
                 throw;
             }
+        }
+
+        public TrimSearchClause GetSearchForRecordClause(BaseObjectTypes baseObjectType, SearchClauseIds searchClauseId, string searchString)
+        {
+            TrimSearchClause searchClause = new TrimSearchClause(database, baseObjectType, searchClauseId);
+            searchClause.SetCriteriaFromString($"\"{searchString.Replace(",", "\\,").Replace("\"", "\\\"")}\"");
+            return searchClause;
         }
     }
 }

@@ -6,7 +6,8 @@
         public string FilePath { get; set; }
         public float Score { get; set; }
         public List<string> Snippets { get; set; }
-        public string date { get; set; }    
+        public string date { get; set; }
+        public Dictionary<string, string> Metadata { get; set; } = new Dictionary<string, string>();
     }
 
 

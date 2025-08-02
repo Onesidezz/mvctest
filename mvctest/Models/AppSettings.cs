@@ -13,6 +13,13 @@
         public int EstimatedRecordCount { get; set; }
         public string FolderDirectory { get; set; }
         public string IndexDirectory { get; set; }
-
+        public string? CSVFilePath { get; set; }
+        public string Classificationjson { get; set; }
+        public string RetentionOfFive { get; set; }
+        public string RetentionOfTen { get; set; }
+        public string RetentionOfOne { get; set; }
+        public string RetentionOfTwo { get; set; }
+        public string RetentionOfThree { get; set; }
+        public string RetentionOfSeven { get; set; }
     }
 }

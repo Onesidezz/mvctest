@@ -5,6 +5,8 @@ namespace mvctest.Services
 {
     public interface IContentManager
     {
+        Database CreateNewDatabaseConnection();
+        void StoreConnectionDetails(string dataSetId, string workGroupServerUrl);
         void EnsureConnected();
         void ConnectDataBase(String dataSetId, String workGroupServerUrl);
         Record GetRecordByTitle(string title);
@@ -17,5 +19,8 @@ namespace mvctest.Services
         void GenerateChatTrainingDataCsv(List<RecordViewModel> records, string filePath);
         void AppendAdvancedChatTrainingData(List<RecordViewModel> records, string filePath);
         bool CreateRecord(CreateRecord recors);
+   
+
+
     }
 }

@@ -9,18 +9,15 @@ namespace mvctest.Controllers
     {
         private readonly ILogger<HomeController> _logger;
         private readonly IContentManager _contentManager;
-        private readonly IStartupFunctionalities _startupTasks;
 
-        public HomeController(ILogger<HomeController> logger, IContentManager contentManager, IStartupFunctionalities startupTasks)
+        public HomeController(ILogger<HomeController> logger, IContentManager contentManager)
         {
             _logger = logger;
             _contentManager = contentManager;
-            _startupTasks = startupTasks;
         }
         public IActionResult AccessLog(string DataSetId, string WorkGroupUrl)
         {
             var access = _contentManager.AccessLog(DataSetId, WorkGroupUrl);
-            _startupTasks.StartupFunctionalities();
             if (access)
             {
                 return RedirectToAction("Index", "ContentManager");

@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using Hangfire;
+using Microsoft.EntityFrameworkCore;
 using mvctest.Context;
 using mvctest.Models;
 using mvctest.Services;
@@ -15,9 +16,12 @@ builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSet
 // ===== 3. Register Application Services =====
 builder.Services.AddScoped<IContentManager, ContentManager>();
 builder.Services.AddScoped<IChatMLService, ChatMLService>();
-builder.Services.AddScoped<IStartupFunctionalities, MyStartupTasks>();
 builder.Services.AddScoped<ICachedCount,CachedCount>();
 builder.Services.AddSingleton<ILuceneInterface, LuceneServices>();
+
+// Add these registrations in Program.cs
+
+
 // ===== 4. Register HTTP & Session Services =====
 builder.Services.AddHttpClient(); // 👈 Register HttpClientFactory
 builder.Services.AddHttpContextAccessor(); // 👈 For accessing HttpContext in services
@@ -29,6 +33,12 @@ builder.Services.AddSession(options =>
     options.Cookie.IsEssential = true;
 });
 
+// In Program.cs
+builder.Services.AddHangfire(configuration => configuration
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_170)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
 // ===== 5. Register MVC/Controllers =====
 builder.Services.AddControllersWithViews();
 
@@ -40,6 +50,8 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Home/Error");
     app.UseHsts();
 }
+app.UseHangfireDashboard();
+app.UseHangfireServer();
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();

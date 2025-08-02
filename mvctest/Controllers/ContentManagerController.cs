@@ -163,15 +163,23 @@ namespace mvctest.Controllers
         {
             try
             {
-              var records =  _contentManager.GetAllRecords("*");
-                var allFiles = new List<string>();
-                foreach (var recRecord in records)
-                {
-                  var data =  _contentManager.Download(Convert.ToInt32(recRecord.URI));
-                    allFiles.Add(data.LocalDownloadPath);
+              //var records =  _contentManager.GetAllRecords("*");
+              //  var allFiles = new List<string?>();
+              //  foreach (var recRecord in records)
+              //  {
+              //      var data = _contentManager.Download(Convert.ToInt32(recRecord.URI));
 
-                }
-                _luceneInterface.BatchIndexFilesFromContentManager(allFiles);
+              //      if (data != null && !string.IsNullOrEmpty(data.LocalDownloadPath))
+              //      {
+              //          allFiles.Add(data.LocalDownloadPath);
+              //      }
+              //      else
+              //      {
+              //          Console.WriteLine($"Skipped record {recRecord.URI} - no electronic document.");
+              //      }
+
+              //  }
+               // _luceneInterface.BatchIndexFilesFromContentManager(allFiles);
                 return View();
             }
             catch (Exception ex)

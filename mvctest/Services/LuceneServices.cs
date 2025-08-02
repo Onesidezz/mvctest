@@ -1,5 +1,4 @@
-﻿using iText.Commons.Actions.Contexts;
-using Lucene.Net.Analysis.Standard;
+﻿using Lucene.Net.Analysis.Standard;
 using Lucene.Net.Documents;
 using Lucene.Net.Index;
 using Lucene.Net.QueryParsers.Classic;
@@ -7,7 +6,6 @@ using Lucene.Net.Search;
 using Lucene.Net.Store;
 using Lucene.Net.Util;
 using Microsoft.Extensions.Options;
-using Microsoft.VisualBasic.FileIO;
 using mvctest.Models;
 using Directory = System.IO.Directory;
 using SearchOption = System.IO.SearchOption;
@@ -23,8 +21,10 @@ namespace mvctest.Services
         private readonly AppSettings _settings;
         private DirectoryReader indexReader;
         private IndexSearcher indexSearcher;
+        private readonly IServiceProvider _serviceProvider;
 
-        public LuceneServices(IOptions<AppSettings> settings)
+
+        public LuceneServices(IOptions<AppSettings> settings, IServiceProvider serviceProvider)
         {
             _settings = settings.Value;
 
@@ -34,12 +34,13 @@ namespace mvctest.Services
                 : Path.Combine(Environment.CurrentDirectory, "index");
 
             InitializeLucene();
+            _serviceProvider = serviceProvider;
 
-            // Only auto-index if FolderDirectory is specified
-            if (!string.IsNullOrEmpty(_settings.FolderDirectory))
-            {
-                BatchIndexFilesFromDirectory(_settings.FolderDirectory);
-            }
+            //// Only auto-index if FolderDirectory is specified
+            //if (!string.IsNullOrEmpty(_settings.FolderDirectory))
+            //{
+            //    BatchIndexFilesFromDirectory(_settings.FolderDirectory);
+            //}
 
         }
 
@@ -87,7 +88,7 @@ namespace mvctest.Services
                 Console.WriteLine($"Directory does not exist: {directoryPath}");
                 return;
             }
-        
+
             // Get all supported file types
 
             foreach (var pattern in supportedPatterns)
@@ -102,7 +103,7 @@ namespace mvctest.Services
                 Console.WriteLine("No supported files found in directory.");
                 return;
             }
-         
+
             // Use the enhanced IndexFiles method for batch processing
             IndexFilesInternal(allFiles, forceReindex: false);
         }
@@ -143,7 +144,109 @@ namespace mvctest.Services
             // Use the enhanced IndexFiles method for batch processing
             IndexFilesInternal(allSupportedFiles, forceReindex: false);
         }
+        public void CommitIndex()
+        {
+            try
+            {
+                indexWriter.Commit();
+                Console.WriteLine("Index changes committed.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error committing index: {ex.Message}");
+                throw;
+            }
+        }
+        public void IndexSingleFileWithMetadata(string filePath, dynamic metadata, bool forceReindex = false)
+        {
+            try
+            {
+                //using var scope = _serviceProvider.CreateScope();
+                //var dbContext = scope.ServiceProvider.GetRequiredService<MyDbContext>();
+                // Check if file exists
+                if (!File.Exists(filePath))
+                {
+                    Console.WriteLine($"File not found: {filePath}");
+                    return;
+                }
 
+                // Check if already indexed (unless force reindex)
+                if (!forceReindex && IsFileAlreadyInIndex(filePath))
+                {
+                    Console.WriteLine($"File already indexed: {Path.GetFileName(filePath)}");
+                    return;
+                }
+
+                // Delete existing document to prevent duplicates
+                DeleteExistingDocument(filePath);
+
+                // Extract file content
+                var content = FileTextExtractor.ExtractTextFromFile(filePath);
+                var fileName = Path.GetFileName(filePath);
+                var fileExtension = Path.GetExtension(filePath).ToLower().TrimStart('.');
+
+                // Create Lucene document
+                var doc = new Document();
+
+                // File fields
+                doc.Add(new TextField("filename", fileName, Field.Store.YES));
+                doc.Add(new TextField("filepath", filePath, Field.Store.YES));
+                doc.Add(new TextField("content", content, Field.Store.YES));
+                doc.Add(new StringField("filetype", fileExtension, Field.Store.YES));
+                doc.Add(new StringField("indexed_date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), Field.Store.YES));
+                doc.Add(new StringField("file_modified_date", File.GetLastWriteTime(filePath).ToString("yyyy-MM-dd HH:mm:ss"), Field.Store.YES));
+
+                // Customer metadata fields
+                doc.Add(new TextField("customer_id", metadata.CustomerID ?? "", Field.Store.YES));
+                doc.Add(new TextField("customer_name", metadata.CustomerName ?? "", Field.Store.YES));
+                doc.Add(new TextField("surname", metadata.SurName ?? "", Field.Store.YES));
+                doc.Add(new TextField("customer_address", metadata.CustomerAddress ?? "", Field.Store.YES));
+                doc.Add(new StringField("invoice_number", metadata.InvoiceNumber ?? "", Field.Store.YES));
+                doc.Add(new TextField("merchant", metadata.Merchant ?? "", Field.Store.YES));
+                doc.Add(new TextField("city", metadata.City ?? "", Field.Store.YES));
+                doc.Add(new TextField("country", metadata.Country ?? "", Field.Store.YES));
+                doc.Add(new TextField("phone_number", metadata.PhoneNumber ?? "", Field.Store.YES));
+                doc.Add(new TextField("email_address", metadata.EmailAddress ?? "", Field.Store.YES));
+
+                // Date fields
+                if (metadata.DateOfPurchase.HasValue)
+                {
+                    doc.Add(new StringField("date_of_purchase", metadata.DateOfPurchase.Value.ToString("yyyy-MM-dd"), Field.Store.YES));
+                    doc.Add(new Int32Field("purchase_year", metadata.DateOfPurchase.Value.Year, Field.Store.YES));
+                }
+
+                if (metadata.DateOfBirth.HasValue)
+                {
+                    doc.Add(new StringField("date_of_birth", metadata.DateOfBirth.Value.ToString("yyyy-MM-dd"), Field.Store.YES));
+                }
+
+                // Numeric fields
+                if (metadata.RetentionPeriodYears.HasValue)
+                {
+                    doc.Add(new Int32Field("retention_period_years", metadata.RetentionPeriodYears.Value, Field.Store.YES));
+                }
+
+                // Create searchable full text combining all metadata
+                var fullText = $"{content} {metadata.CustomerID} {metadata.CustomerName} {metadata.SurName} " +
+                              $"{metadata.CustomerAddress} {metadata.InvoiceNumber} {metadata.Merchant} " +
+                              $"{metadata.City} {metadata.Country} {metadata.PhoneNumber} {metadata.EmailAddress}";
+                doc.Add(new TextField("full_text", fullText, Field.Store.NO));
+
+                // Add document to index
+                indexWriter.AddDocument(doc);
+
+                // Mark as indexed
+                var tracker = new FileIndexTracker(IndexPath);
+                tracker.MarkFileAsIndexed(filePath);
+
+                Console.WriteLine($"Indexed with metadata: {fileName} for customer {metadata.CustomerID} - {metadata.CustomerName}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error indexing file {Path.GetFileName(filePath)}: {ex.Message}");
+                throw;
+            }
+        }
 
         public void IndexFilesInternal(List<string> filesToIndex, bool forceReindex)
         {
@@ -347,7 +450,20 @@ namespace mvctest.Services
                 }
 
                 var searcher = new IndexSearcher(reader);
-                var parser = new MultiFieldQueryParser(LuceneVersion, new[] { "filename", "content" }, analyzer);
+
+                // Include all metadata fields in the search
+                var searchFields = new[]
+                {
+                    "filename",
+                    "content",
+                    "customer_id",
+                    "customer_name",
+                    "invoice_number",
+                    "city",
+                    "country"
+                };
+
+                var parser = new MultiFieldQueryParser(LuceneVersion, searchFields, analyzer);
                 var luceneQuery = parser.Parse(query);
 
                 // Use a higher number to get more results initially, then we can deduplicate
@@ -372,7 +488,7 @@ namespace mvctest.Services
                     var fileName = doc.Get("filename");
                     var filePath = doc.Get("filepath");
                     var content = doc.Get("content");
-                    var date = doc.Get("indexed_date"); 
+                    var date = doc.Get("indexed_date");
                     var score = hits[i].Score;
 
                     // Skip if we've already seen this file (prevent duplicates)
@@ -382,6 +498,14 @@ namespace mvctest.Services
                         continue;
                     }
 
+                    // Get all metadata fields
+                    var customerId = doc.Get("customer_id");
+                    var customerName = doc.Get("customer_name");
+                    var invoiceNumber = doc.Get("invoice_number");
+                    var city = doc.Get("city");
+                    var country = doc.Get("country");
+                    var dateOfPurchase = doc.Get("date_of_purchase");
+
                     var snippets = GetAllContentSnippets(content, query, 250);
 
                     var resultModel = new SearchResultModel
@@ -390,15 +514,31 @@ namespace mvctest.Services
                         FilePath = filePath,
                         Score = score,
                         Snippets = snippets,
-                        date = date,    
+                        date = date,
+                        // Add metadata to the result model
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["CustomerID"] = customerId ?? "",
+                            ["CustomerName"] = customerName ?? "",
+                            ["InvoiceNumber"] = invoiceNumber ?? "",
+                            ["City"] = city ?? "",
+                            ["Country"] = country ?? "",
+                            ["DateOfPurchase"] = dateOfPurchase ?? ""
+                        }
                     };
 
                     resultList.Add(resultModel);
                     resultCount++;
 
+                    // Enhanced console output with metadata
                     Console.WriteLine($"Result {resultCount}: {fileName}");
                     Console.WriteLine($"Path: {filePath}");
                     Console.WriteLine($"Score: {score:F2}");
+                    Console.WriteLine($"Customer: {customerName} (ID: {customerId})");
+                    Console.WriteLine($"Invoice: {invoiceNumber}");
+                    Console.WriteLine($"Location: {city}, {country}");
+                    if (!string.IsNullOrEmpty(dateOfPurchase))
+                        Console.WriteLine($"Purchase Date: {dateOfPurchase}");
                     Console.WriteLine($"Occurrences: {snippets.Count}");
                     Console.WriteLine(new string('-', 80));
                 }
@@ -540,7 +680,7 @@ namespace mvctest.Services
 
             return snippets;
         }
-       
+
         public string GetContentSnippet(string content, string query, int maxLength)
         {
             var snippets = GetAllContentSnippets(content, query, maxLength);
@@ -606,7 +746,7 @@ namespace mvctest.Services
                            .Sum(file => new FileInfo(file).Length);
         }
 
-      
+
 
         public void ClearIndex(string confirmation = null)
         {
@@ -656,7 +796,7 @@ namespace mvctest.Services
         {
             CleanupLucene();
         }
-       
+
 
     }
 }

@@ -1,0 +1,32 @@
+{
+  "Name": "Shopping Info",
+  "ClassOfRecord": "Corporate",
+  "LevelNumber": "101",
+  "CanAttachRecords": false,
+  "ChildPattern": "nnnn/",
+  "ChildLastNumber": "0001/",
+  "PreventAutoClassification": false,
+  "Notes": "Created by SDK",
+  "LowerLevelClassification": [
+    {
+      "Name": "Country",
+      "ClassOfRecord": "Corporate",
+      "CanAttachRecords": true,
+      "LevelNumber": "102",
+      "ChildPattern": "yyggg/",
+      "ChildLastNumber": "25001/",
+      "PreventAutoClassification": false,
+      "Notes": "Sub-category for Country"
+    },
+    {
+      "Name": "City",
+      "ClassOfRecord": "Corporate",
+      "CanAttachRecords": true,
+      "LevelNumber": "103",
+      "ChildPattern": "yyggg/",
+      "ChildLastNumber": "25002/",
+      "PreventAutoClassification": false,
+      "Notes": "Sub-category for City"
+    }
+  ]
+}
