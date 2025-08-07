@@ -22,10 +22,11 @@ namespace mvctest.Services
         private readonly AppSettings _settings;
         private readonly HttpClient _httpClient;
         private readonly IContentManager _contentManager;
-        private readonly string Prompt = "Summarize the following technical document by explaining only its main purpose and key functions. Avoid any step-by-step analysis or personal commentary. Focus purely on what the document is about and its intended use, in 3-5 concise sentences:\n\n";
+        private readonly ILuceneInterface _luceneInterface;
+        private readonly string Prompt = "Write a brief summary of this document in 2-3 sentences. State only what the document is about and what it contains. Do not include reasoning, analysis, or explanations of your process:\n\n";
 
 
-        public ChatMLService(IOptions<AppSettings> options, HttpClient httpClient, IContentManager contentManager)
+        public ChatMLService(IOptions<AppSettings> options, HttpClient httpClient, IContentManager contentManager, ILuceneInterface luceneInterface)
         {
             _settings = options.Value;
             _httpClient = httpClient;
@@ -39,6 +40,7 @@ namespace mvctest.Services
 
             _httpClient = httpClient;
             _contentManager = contentManager;
+            _luceneInterface = luceneInterface;
         }
 
         public async Task<string> GetChatBotResponse(string userMessage, bool isFromGPT = false, bool isFromDeepseek = false)
@@ -268,9 +270,201 @@ namespace mvctest.Services
             return sb.ToString();
         }
 
+        public async Task<string> GetFileSummaryAsync(string filePath)
+        {
+            var rawResponse = await DeepSeekSummarizeWithStreaming(filePath, Prompt);
+            return CleanDeepSeekResponse(rawResponse);
+        }
 
+        private string CleanDeepSeekResponse(string rawResponse)
+        {
+            if (string.IsNullOrEmpty(rawResponse))
+                return "No summary available.";
 
+            // Split response into sentences
+            var sentences = rawResponse.Split(new char[] { '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries)
+                                     .Select(s => s.Trim())
+                                     .Where(s => !string.IsNullOrEmpty(s))
+                                     .ToList();
 
+            if (sentences.Count == 0)
+                return rawResponse;
 
+            // Look for sentences that don't contain reasoning phrases
+            var reasoningPhrases = new string[]
+            {
+                "I need to", "I'll identify", "I should", "First,", "Then,", "Next,", 
+                "Maybe", "It might", "I'm supposed to", "Let me", "since it's",
+                "probably includes", "It seems to be", "The main points are",
+                "because that's not", "Just focus on"
+            };
+
+            var cleanSentences = sentences.Where(sentence => 
+                !reasoningPhrases.Any(phrase => sentence.Contains(phrase, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            // If we have clean sentences, take the last 2-3 as they're usually the actual summary
+            if (cleanSentences.Count >= 2)
+            {
+                var summaryCount = Math.Min(3, cleanSentences.Count);
+                var summary = string.Join(". ", cleanSentences.TakeLast(summaryCount)) + ".";
+                return summary;
+            }
+
+            // Fallback: take the last 2-3 sentences from original response
+            var fallbackCount = Math.Min(3, sentences.Count);
+            return string.Join(". ", sentences.TakeLast(fallbackCount)) + ".";
+        }
+
+        public async Task<string> DeepContentSearchAsync(string query, List<string> filePaths)
+        {
+            try
+            {
+                // Use local semantic search from LuceneInterface
+                var semanticResults = _luceneInterface?.SemanticSearch(query, filePaths, 5);
+                
+                var contentBuilder = new StringBuilder();
+                contentBuilder.AppendLine($"User Question: {query}");
+                
+                if (semanticResults?.Any() == true)
+                {
+                    contentBuilder.AppendLine("\nRelevant Document Contents (Semantically Matched):");
+                    
+                    foreach (var result in semanticResults)
+                    {
+                        contentBuilder.AppendLine($"\n--- File: {result.FileName} (Relevance: {result.Score:F3}) ---");
+                        
+                        // Use relevant text from metadata if available
+                        var relevantText = result.Metadata?.GetValueOrDefault("RelevantText", "");
+                        
+                        if (!string.IsNullOrEmpty(relevantText))
+                        {
+                            contentBuilder.AppendLine(relevantText);
+                        }
+                        else if (File.Exists(result.FilePath))
+                        {
+                            try
+                            {
+                                var fileContent = FileTextExtractor.ExtractTextFromFile(result.FilePath);
+                                if (fileContent.Length > 3000)
+                                {
+                                    fileContent = fileContent.Substring(0, 3000) + "... [truncated]";
+                                }
+                                contentBuilder.AppendLine(fileContent);
+                            }
+                            catch (Exception ex)
+                            {
+                                contentBuilder.AppendLine($"[Error reading file: {ex.Message}]");
+                            }
+                        }
+                        
+                        // Add metadata context
+                        if (result.Metadata?.Any() == true)
+                        {
+                            var customerInfo = result.Metadata.GetValueOrDefault("CustomerName", "");
+                            var customerId = result.Metadata.GetValueOrDefault("CustomerID", "");
+                            var invoiceNumber = result.Metadata.GetValueOrDefault("InvoiceNumber", "");
+                            
+                            if (!string.IsNullOrEmpty(customerInfo) || !string.IsNullOrEmpty(customerId))
+                            {
+                                contentBuilder.AppendLine($"[Context: Customer: {customerInfo} (ID: {customerId}), Invoice: {invoiceNumber}]");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback to processing specified files directly
+                    contentBuilder.AppendLine("\nDocument Contents (Direct File Processing):");
+                    
+                    foreach (var filePath in filePaths.Take(3)) // Limit to avoid overwhelming the AI
+                    {
+                        try
+                        {
+                            if (File.Exists(filePath))
+                            {
+                                var fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
+                                if (fileContent.Length > 10000)
+                                {
+                                    fileContent = fileContent.Substring(0, 10000) + "... [truncated]";
+                                }
+                                
+                                var fileName = Path.GetFileName(filePath);
+                                contentBuilder.AppendLine($"\n--- File: {fileName} ---");
+                                contentBuilder.AppendLine(fileContent);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            var fileName = Path.GetFileName(filePath);
+                            contentBuilder.AppendLine($"\n--- File: {fileName} ---");
+                            contentBuilder.AppendLine($"[Error reading file: {ex.Message}]");
+                        }
+                    }
+                }
+
+                var deepSearchPrompt = "Answer the user's question based on the provided documents. " +
+                                     "Focus on the most relevant information from the semantically matched content. " +
+                                     "If the answer is found in specific files, mention which file(s) contain the information. " +
+                                     "If the information is not found, say so clearly. " +
+                                     "Be specific and provide context from the documents:\n\n";
+
+                var combinedContent = deepSearchPrompt + contentBuilder.ToString();
+                
+                // Use DeepSeek to analyze the semantically relevant content
+                var rawResponse = await DeepSeekSummarizeWithStreaming("", "", combinedContent);
+                return CleanDeepSeekResponse(rawResponse);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in DeepContentSearchAsync: {ex.Message}");
+                // Fallback to original implementation
+                return await FallbackDeepContentSearchAsync(query, filePaths);
+            }
+        }
+
+        private async Task<string> FallbackDeepContentSearchAsync(string query, List<string> filePaths)
+        {
+            var contentBuilder = new StringBuilder();
+            contentBuilder.AppendLine($"User Question: {query}");
+            contentBuilder.AppendLine("\nDocument Contents:");
+
+            // Extract content from all files (fallback method)
+            foreach (var filePath in filePaths.Take(3)) // Limit to avoid overwhelming
+            {
+                try
+                {
+                    if (File.Exists(filePath))
+                    {
+                        var fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
+                        if (fileContent.Length > 10000)
+                        {
+                            fileContent = fileContent.Substring(0, 10000) + "... [truncated]";
+                        }
+                        
+                        var fileName = Path.GetFileName(filePath);
+                        contentBuilder.AppendLine($"\n--- File: {fileName} ---");
+                        contentBuilder.AppendLine(fileContent);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    var fileName = Path.GetFileName(filePath);
+                    contentBuilder.AppendLine($"\n--- File: {fileName} ---");
+                    contentBuilder.AppendLine($"[Error reading file: {ex.Message}]");
+                }
+            }
+
+            var deepSearchPrompt = "Answer the user's question based on the provided documents. " +
+                                 "If the answer is found in specific files, mention which file(s) contain the information. " +
+                                 "If the information is not found in any of the documents, say so clearly. " +
+                                 "Be specific and cite the relevant files when possible:\n\n";
+
+            var combinedContent = deepSearchPrompt + contentBuilder.ToString();
+            
+            // Use DeepSeek to analyze all content and answer the question
+            var rawResponse = await DeepSeekSummarizeWithStreaming("", "", combinedContent);
+            return CleanDeepSeekResponse(rawResponse);
+        }
     }
 }

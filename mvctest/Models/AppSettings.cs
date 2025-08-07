@@ -21,5 +21,6 @@
         public string RetentionOfTwo { get; set; }
         public string RetentionOfThree { get; set; }
         public string RetentionOfSeven { get; set; }
+        public string EmbeddingModelPath { get; set; }
     }
 }

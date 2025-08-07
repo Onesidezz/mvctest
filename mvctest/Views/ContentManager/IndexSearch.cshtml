@@ -1,72 +1,221 @@
 ﻿@{
-    ViewData["Title"] = "Enhanced Search";
+    ViewData["Title"] = "Search Records";
 }
 
 <style>
-    body {
-        background-color: #f9fafb;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    .search-page {
+        background-color: #f8f9fa;
+        min-height: 80vh;
+        padding: 40px 0;
     }
 
-    .search-wrapper {
-        max-width: 600px;
-        margin: 80px auto;
-        background: #fff;
-        padding: 30px 40px;
-        border-radius: 10px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    .search-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 0 20px;
+    }
+
+    .search-header {
+        text-align: center;
+        margin-bottom: 40px;
     }
 
     .search-title {
-        font-size: 24px;
+        font-size: 2.25rem;
         font-weight: 600;
-        margin-bottom: 20px;
-        color: #1f2937;
-        text-align: center;
+        color: #212529;
+        margin-bottom: 8px;
+    }
+
+    .search-subtitle {
+        color: #6c757d;
+        font-size: 1.125rem;
+        margin-bottom: 0;
+    }
+
+    .search-form-card {
+        background: white;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 32px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+        margin-bottom: 24px;
     }
 
     .search-form {
         display: flex;
-        gap: 10px;
+        gap: 12px;
+        align-items: flex-end;
+    }
+
+    .form-group {
+        flex: 1;
+    }
+
+    .form-label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 500;
+        color: #374151;
+        font-size: 0.875rem;
     }
 
     .search-input {
-        flex: 1;
+        width: 100%;
         padding: 12px 16px;
-        border: 1px solid #d1d5db;
+        border: 2px solid #d1d5db;
         border-radius: 6px;
         font-size: 16px;
-        transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        transition: border-color 0.2s ease;
+        background-color: #fff;
     }
 
     .search-input:focus {
-        border-color: #2563eb;
-        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
         outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
     }
 
     .search-button {
-        background-color: #2563eb;
+        background-color: #3b82f6;
         color: white;
-        padding: 12px 20px;
         border: none;
+        padding: 12px 24px;
         border-radius: 6px;
         font-size: 16px;
+        font-weight: 500;
         cursor: pointer;
-        transition: background-color 0.3s ease;
+        transition: background-color 0.2s ease;
+        white-space: nowrap;
     }
 
     .search-button:hover {
-        background-color: #1e40af;
+        background-color: #2563eb;
+    }
+
+    .search-button:active {
+        transform: translateY(1px);
+    }
+
+    .info-section {
+        background: white;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 24px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+    }
+
+    .info-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: #374151;
+        margin-bottom: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .info-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .info-list li {
+        padding: 8px 0;
+        border-bottom: 1px solid #f3f4f6;
+        color: #6b7280;
+    }
+
+    .info-list li:last-child {
+        border-bottom: none;
+    }
+
+    .info-list li:before {
+        content: "•";
+        color: #3b82f6;
+        margin-right: 12px;
+        font-weight: bold;
+    }
+
+    @@media (max-width: 768px) {
+        .search-form {
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        .search-button {
+            width: 100%;
+        }
+        
+        .search-form-card {
+            padding: 24px 20px;
+        }
+        
+        .search-title {
+            font-size: 1.875rem;
+        }
+    }
+
+    .loading-indicator {
+        display: none;
+        text-align: center;
+        color: #6b7280;
+        margin-top: 16px;
+    }
+
+    .loading-indicator.show {
+        display: block;
     }
 </style>
 
-<div class="search-wrapper">
-    <h2 class="search-title">Search Records</h2>
-    
-    <form method="get" asp-action="SearchResults" asp-controller="ContentManager" class="search-form">
-        <input type="text" name="content" class="search-input" placeholder="Enter keyword..." />
-        <button type="submit" class="search-button">Search</button>
-    </form>
+<div class="search-page">
+    <div class="search-container">
+        <div class="search-header">
+            <h1 class="search-title">Search Records</h1>
+            <p class="search-subtitle">Find the information you need from our database</p>
+        </div>
+
+        <div class="search-form-card">
+            <form method="get" asp-action="SearchResults" asp-controller="ContentManager" id="searchForm" class="search-form">
+                <div class="form-group">
+                    <label for="searchContent" class="form-label">Search Query</label>
+                    <input type="text" 
+                           id="searchContent"
+                           name="content" 
+                           class="search-input" 
+                           placeholder="Enter keywords or phrases..."
+                           autocomplete="off"
+                           required />
+                </div>
+                <button type="submit" class="search-button">
+                    Search
+                </button>
+            </form>
+            <div class="loading-indicator" id="loadingIndicator">
+                Searching...
+            </div>
+        </div>
+
+        <div class="info-section">
+            <h3 class="info-title">
+                <span>💡</span>
+                Search Tips
+            </h3>
+            <ul class="info-list">
+                <li>Use specific keywords for more accurate results</li>
+                <li>Try different variations of your search terms</li>
+                <li>Use quotation marks for exact phrase matching</li>
+                <li>Combine multiple keywords with spaces</li>
+            </ul>
+        </div>
+    </div>
 </div>
+
+<script>
+    document.getElementById('searchForm').addEventListener('submit', function() {
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        loadingIndicator.classList.add('show');
+    });
+</script>
 

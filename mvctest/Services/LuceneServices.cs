@@ -7,6 +7,7 @@ using Lucene.Net.Store;
 using Lucene.Net.Util;
 using Microsoft.Extensions.Options;
 using mvctest.Models;
+using System.Text;
 using Directory = System.IO.Directory;
 using SearchOption = System.IO.SearchOption;
 
@@ -22,6 +23,7 @@ namespace mvctest.Services
         private DirectoryReader indexReader;
         private IndexSearcher indexSearcher;
         private readonly IServiceProvider _serviceProvider;
+        private readonly TextEmbeddingService _embeddingService;
 
 
         public LuceneServices(IOptions<AppSettings> settings, IServiceProvider serviceProvider)
@@ -35,6 +37,19 @@ namespace mvctest.Services
 
             InitializeLucene();
             _serviceProvider = serviceProvider;
+
+            // Initialize embedding service for semantic search
+            var modelPath = _settings.EmbeddingModelPath ?? Path.Combine(Environment.CurrentDirectory, "models", "sentence-transformer.onnx");
+            try
+            {
+                _embeddingService = new TextEmbeddingService(modelPath);
+                Console.WriteLine("Text embedding service initialized successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Could not load embedding model: {ex.Message}");
+                _embeddingService = null;
+            }
 
             //// Only auto-index if FolderDirectory is specified
             //if (!string.IsNullOrEmpty(_settings.FolderDirectory))
@@ -180,10 +195,20 @@ namespace mvctest.Services
                 // Delete existing document to prevent duplicates
                 DeleteExistingDocument(filePath);
 
-                // Extract file content
-                var content = FileTextExtractor.ExtractTextFromFile(filePath);
+                // Extract file content with high-resolution capabilities for Excel files
+                var content = "";
                 var fileName = Path.GetFileName(filePath);
                 var fileExtension = Path.GetExtension(filePath).ToLower().TrimStart('.');
+                
+                // Enhanced high-resolution extraction for Excel files
+                if (fileExtension == "xlsx")
+                {
+                    content = ExtractStructuredExcelContent(filePath);
+                }
+                else
+                {
+                    content = FileTextExtractor.ExtractTextFromFile(filePath);
+                }
 
                 // Create Lucene document
                 var doc = new Document();
@@ -226,6 +251,16 @@ namespace mvctest.Services
                     doc.Add(new Int32Field("retention_period_years", metadata.RetentionPeriodYears.Value, Field.Store.YES));
                 }
 
+                // High-resolution Excel field indexing
+                if (fileExtension == "xlsx")
+                {
+                    var structuredData = ExtractExcelFieldData(filePath);
+                    foreach (var field in structuredData)
+                    {
+                        doc.Add(new TextField(field.Key.ToLower(), field.Value, Field.Store.YES));
+                    }
+                }
+
                 // Create searchable full text combining all metadata
                 var fullText = $"{content} {metadata.CustomerID} {metadata.CustomerName} {metadata.SurName} " +
                               $"{metadata.CustomerAddress} {metadata.InvoiceNumber} {metadata.Merchant} " +
@@ -239,7 +274,7 @@ namespace mvctest.Services
                 var tracker = new FileIndexTracker(IndexPath);
                 tracker.MarkFileAsIndexed(filePath);
 
-                Console.WriteLine($"Indexed with metadata: {fileName} for customer {metadata.CustomerID} - {metadata.CustomerName}");
+                Console.WriteLine($"Enhanced high-resolution indexed: {fileName} for customer {metadata.CustomerID} - {metadata.CustomerName}");
             }
             catch (Exception ex)
             {
@@ -451,99 +486,17 @@ namespace mvctest.Services
 
                 var searcher = new IndexSearcher(reader);
 
-                // Include all metadata fields in the search
-                var searchFields = new[]
-                {
-                    "filename",
-                    "content",
-                    "customer_id",
-                    "customer_name",
-                    "invoice_number",
-                    "city",
-                    "country"
-                };
+                //// Enhanced search to handle all OlamaApi high-resolution document types
+                //var results = SearchHighResolutionIndex(searcher, query);
+                
+                //if (results.Any())
+                //{
+                //    Console.WriteLine($"Found {results.Count} high-resolution results");
+                //    return results;
+                //}
 
-                var parser = new MultiFieldQueryParser(LuceneVersion, searchFields, analyzer);
-                var luceneQuery = parser.Parse(query);
-
-                // Use a higher number to get more results initially, then we can deduplicate
-                var hits = searcher.Search(luceneQuery, 100).ScoreDocs;
-
-                if (hits.Length == 0)
-                {
-                    Console.WriteLine("No results found.");
-                    return resultList;
-                }
-
-                // Use a HashSet to track unique files and prevent duplicates
-                var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                Console.WriteLine($"\nFound {hits.Length} result(s):\n");
-                Console.WriteLine(new string('=', 80));
-
-                int resultCount = 0;
-                for (int i = 0; i < hits.Length && resultCount < 20; i++)
-                {
-                    var doc = searcher.Doc(hits[i].Doc);
-                    var fileName = doc.Get("filename");
-                    var filePath = doc.Get("filepath");
-                    var content = doc.Get("content");
-                    var date = doc.Get("indexed_date");
-                    var score = hits[i].Score;
-
-                    // Skip if we've already seen this file (prevent duplicates)
-                    if (!seenFiles.Add(filePath))
-                    {
-                        Console.WriteLine($"Skipping duplicate result for: {fileName}");
-                        continue;
-                    }
-
-                    // Get all metadata fields
-                    var customerId = doc.Get("customer_id");
-                    var customerName = doc.Get("customer_name");
-                    var invoiceNumber = doc.Get("invoice_number");
-                    var city = doc.Get("city");
-                    var country = doc.Get("country");
-                    var dateOfPurchase = doc.Get("date_of_purchase");
-
-                    var snippets = GetAllContentSnippets(content, query, 250);
-
-                    var resultModel = new SearchResultModel
-                    {
-                        FileName = fileName,
-                        FilePath = filePath,
-                        Score = score,
-                        Snippets = snippets,
-                        date = date,
-                        // Add metadata to the result model
-                        Metadata = new Dictionary<string, string>
-                        {
-                            ["CustomerID"] = customerId ?? "",
-                            ["CustomerName"] = customerName ?? "",
-                            ["InvoiceNumber"] = invoiceNumber ?? "",
-                            ["City"] = city ?? "",
-                            ["Country"] = country ?? "",
-                            ["DateOfPurchase"] = dateOfPurchase ?? ""
-                        }
-                    };
-
-                    resultList.Add(resultModel);
-                    resultCount++;
-
-                    // Enhanced console output with metadata
-                    Console.WriteLine($"Result {resultCount}: {fileName}");
-                    Console.WriteLine($"Path: {filePath}");
-                    Console.WriteLine($"Score: {score:F2}");
-                    Console.WriteLine($"Customer: {customerName} (ID: {customerId})");
-                    Console.WriteLine($"Invoice: {invoiceNumber}");
-                    Console.WriteLine($"Location: {city}, {country}");
-                    if (!string.IsNullOrEmpty(dateOfPurchase))
-                        Console.WriteLine($"Purchase Date: {dateOfPurchase}");
-                    Console.WriteLine($"Occurrences: {snippets.Count}");
-                    Console.WriteLine(new string('-', 80));
-                }
-
-                return resultList;
+                // Fallback to standard search if no high-resolution results found
+                return SearchStandardIndex(searcher, query);
             }
             catch (IndexNotFoundException ex)
             {
@@ -554,24 +507,468 @@ namespace mvctest.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"Error during search: {ex.Message}");
-
-                // Additional debugging information
-                if (ex.Message.Contains("no segments"))
-                {
-                    Console.WriteLine("The index appears to be empty or corrupted.");
-                    Console.WriteLine("Try re-indexing your files or clearing and rebuilding the index.");
-
-                    // Check what files exist in the index directory
-                    if (Directory.Exists(IndexPath))
-                    {
-                        var files = Directory.GetFiles(IndexPath);
-                        Console.WriteLine($"Files in index directory: {string.Join(", ", files.Select(Path.GetFileName))}");
-                    }
-                }
-
                 return resultList;
             }
         }
+
+        private List<SearchResultModel> SearchHighResolutionIndex(IndexSearcher searcher, string query)
+        {
+            var resultList = new List<SearchResultModel>();
+
+            try
+            {
+                // Detect query type for optimized high-resolution search
+                var queryType = DetectHighResolutionQueryType(query);
+                
+                Query finalQuery;
+                
+                switch (queryType)
+                {
+                    case "word":
+                        var wordTerm = query.Substring(5); // Remove "word:" prefix
+                        finalQuery = BuildWordLevelQuery(wordTerm);
+                        Console.WriteLine($"Executing word-level search for: {wordTerm}");
+                        break;
+                        
+                    case "character":
+                        var charTerm = query.Substring(10); // Remove "character:" prefix
+                        finalQuery = BuildCharacterLevelQuery(charTerm);
+                        Console.WriteLine($"Executing character-level search for: {charTerm}");
+                        break;
+                        
+                    case "ngram_text":
+                        var ngramTerm = query.Substring(11); // Remove "ngram_text:" prefix
+                        finalQuery = BuildNGramQuery(ngramTerm);
+                        Console.WriteLine($"Executing n-gram search for: {ngramTerm}");
+                        break;
+                        
+                    case "block_type":
+                        var blockTypeTerm = query.Substring(11); // Remove "block_type:" prefix
+                        finalQuery = BuildContentBlockTypeQuery(blockTypeTerm);
+                        Console.WriteLine($"Executing content block type search for: {blockTypeTerm}");
+                        break;
+                        
+                    case "field_specific":
+                        finalQuery = BuildMainDocumentQuery(query);
+                        Console.WriteLine($"Executing field-specific search for: {query}");
+                        break;
+                        
+                    default:
+                        // Comprehensive multi-layer search
+                        finalQuery = BuildComprehensiveQuery(query);
+                        Console.WriteLine($"Executing comprehensive high-resolution search for: {query}");
+                        break;
+                }
+
+                // Execute search
+                var hits = searcher.Search(finalQuery, 100).ScoreDocs;
+                
+                // Group results by file path to create comprehensive file results
+                var fileResults = new Dictionary<string, SearchResultModel>();
+                
+                foreach (var hit in hits)
+                {
+                    var doc = searcher.Doc(hit.Doc);
+                    var filePath = doc.Get("filepath");
+                    var fileName = doc.Get("filename");
+                    var docType = doc.Get("document_type");
+
+                    if (string.IsNullOrEmpty(filePath)) continue;
+
+                    if (!fileResults.ContainsKey(filePath))
+                    {
+                        // Create new result for this file
+                        var mainDoc = FindMainDocument(searcher, filePath);
+                        fileResults[filePath] = CreateSearchResultFromMainDoc(mainDoc, hit.Score, filePath, fileName);
+                    }
+
+                    // Add specific information based on document type
+                    AddHighResolutionContext(fileResults[filePath], doc, docType, query);
+                }
+
+                resultList.AddRange(fileResults.Values.OrderByDescending(r => r.Score).Take(20));
+                Console.WriteLine($"High-resolution search found {resultList.Count} results across {fileResults.Count} files");
+                
+                return resultList;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in high-resolution search: {ex.Message}");
+                return resultList;
+            }
+        }
+
+        private List<SearchResultModel> SearchStandardIndex(IndexSearcher searcher, string query)
+        {
+            var resultList = new List<SearchResultModel>();
+
+            try
+            {
+                Console.WriteLine($"Searching with new indexing structure for query: '{query}'");
+                
+                // Create comprehensive query for both main documents and content blocks
+                var mainDocQuery = BuildMainDocumentSearchQuery(query);
+                var contentBlockQuery = BuildContentBlockSearchQuery(query);
+                
+                // Combine both queries
+                var combinedQuery = new BooleanQuery();
+                combinedQuery.Add(mainDocQuery, Occur.SHOULD);
+                combinedQuery.Add(contentBlockQuery, Occur.SHOULD);
+
+                // Execute search
+                var hits = searcher.Search(combinedQuery, 100).ScoreDocs;
+
+                if (hits.Length == 0)
+                {
+                    Console.WriteLine("No results found in main documents or content blocks.");
+                    return resultList;
+                }
+
+                Console.WriteLine($"Found {hits.Length} document/block matches");
+
+                // Group results by file path to consolidate
+                var fileResults = new Dictionary<string, SearchResultModel>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var hit in hits)
+                {
+                    try
+                    {
+                        var doc = searcher.Doc(hit.Doc);
+                        var docType = doc.Get("type");
+                        var filePath = doc.Get("file_path");
+                        var fileName = doc.Get("file_name");
+
+                        if (string.IsNullOrEmpty(filePath)) continue;
+
+                        // Create or get existing result for this file
+                        if (!fileResults.ContainsKey(filePath))
+                        {
+                            fileResults[filePath] = new SearchResultModel
+                            {
+                                FileName = fileName ?? Path.GetFileName(filePath),
+                                FilePath = filePath,
+                                Content = "",
+                                Score = 0,
+                                Snippets = new List<string>(),
+                                date = doc.Get("last_modified") ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                Metadata = new Dictionary<string, string>
+                                {
+                                    ["DocumentType"] = docType ?? "unknown",
+                                    ["SearchType"] = "Standard Index Search"
+                                }
+                            };
+                        }
+
+                        var result = fileResults[filePath];
+                        
+                        // Update score with highest match
+                        if (hit.Score > result.Score)
+                        {
+                            result.Score = hit.Score;
+                        }
+
+                        // Add content snippets based on document type
+                        if (docType == "main")
+                        {
+                            var content = doc.Get("content");
+                            if (!string.IsNullOrEmpty(content))
+                            {
+                                result.Content = content;
+                                var snippets = GetAllContentSnippets(content, query, 250);
+                                result.Snippets.AddRange(snippets);
+                                
+                                Console.WriteLine($"✓ Main document match: {fileName} (score: {hit.Score:F3})");
+                            }
+
+                            // Add structured data if available
+                            var structuredData = doc.Get("structured_data");
+                            if (!string.IsNullOrEmpty(structuredData))
+                            {
+                                result.Metadata["StructuredData"] = "Available";
+                            }
+                        }
+                        else if (docType == "content_block")
+                        {
+                            var blockContent = doc.Get("block_content");
+                            var blockType = doc.Get("block_type");
+                            
+                            if (!string.IsNullOrEmpty(blockContent))
+                            {
+                                // Create snippet for content block
+                                var blockSnippet = $"[{blockType}] {blockContent.Substring(0, Math.Min(200, blockContent.Length))}";
+                                if (blockContent.Length > 200) blockSnippet += "...";
+                                
+                                result.Snippets.Add(blockSnippet);
+                                result.Metadata[$"Block_{blockType}_Match"] = "Found";
+                                
+                                Console.WriteLine($"✓ Content block match: {fileName} [{blockType}] (score: {hit.Score:F3})");
+                            }
+                        }
+                    }
+                    catch (Exception hitEx)
+                    {
+                        Console.WriteLine($"Error processing search hit: {hitEx.Message}");
+                    }
+                }
+
+                // Convert to list, filter by score threshold, and take top results
+                resultList = fileResults.Values
+                    .Where(r => r.Score >= 0.1f) // Only show results with score 0.1 or higher
+                    .OrderByDescending(r => r.Score)
+                    .Take(20)
+                    .ToList();
+
+                // Remove duplicate snippets
+                foreach (var result in resultList)
+                {
+                    result.Snippets = result.Snippets.Distinct().ToList();
+                }
+
+                Console.WriteLine($"Consolidated to {resultList.Count} unique file results");
+                
+                return resultList;
+            }
+            catch (IndexNotFoundException ex)
+            {
+                Console.WriteLine("Index not found. Please index some files first.");
+                Console.WriteLine($"Index path: {IndexPath}");
+                return resultList;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during standard search: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                return resultList;
+            }
+        }
+
+        private Query BuildMainDocumentSearchQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Filter for main documents only
+            booleanQuery.Add(new TermQuery(new Term("type", "main")), Occur.MUST);
+            
+            // Search in content and structured fields
+            var searchFields = new[] { "content", "structured_data" };
+            
+            // Add field-specific searches if available
+            for (int i = 0; i < 10; i++) // Check for field_* entries
+            {
+                searchFields = searchFields.Concat(new[] { $"field_category", $"field_description", $"field_value", $"field_status" }).ToArray();
+            }
+            
+            try
+            {
+                var parser = new MultiFieldQueryParser(LuceneVersion, searchFields, analyzer);
+                var contentQuery = parser.Parse(query);
+                booleanQuery.Add(contentQuery, Occur.MUST);
+            }
+            catch
+            {
+                // Fallback to simple term query if parsing fails
+                booleanQuery.Add(new TermQuery(new Term("content", query)), Occur.MUST);
+            }
+            
+            return booleanQuery;
+        }
+
+        private Query BuildContentBlockSearchQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Filter for content blocks only
+            booleanQuery.Add(new TermQuery(new Term("type", "content_block")), Occur.MUST);
+            
+            // Search in block content
+            try
+            {
+                var parser = new QueryParser(LuceneVersion, "block_content", analyzer);
+                var blockQuery = parser.Parse(query);
+                booleanQuery.Add(blockQuery, Occur.MUST);
+            }
+            catch
+            {
+                // Fallback to simple term query
+                booleanQuery.Add(new TermQuery(new Term("block_content", query)), Occur.MUST);
+            }
+            
+            return booleanQuery;
+        }
+
+        public List<SearchResultModel> SemanticSearch(string query, List<string> filePaths = null, int maxResults = 10)
+        {
+            var results = new List<SearchResultModel>();
+
+            if (_embeddingService == null)
+            {
+                Console.WriteLine("Embedding service not available, falling back to keyword search");
+                return SearchFiles(query);
+            }
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                Console.WriteLine("Please enter a valid search query.");
+                return results;
+            }
+
+            try
+            {
+                var indexDirectory = FSDirectory.Open(IndexPath);
+
+                if (!DirectoryReader.IndexExists(indexDirectory))
+                {
+                    Console.WriteLine("Index does not exist. Please index some files first.");
+                    return results;
+                }
+
+                // Generate query embedding
+                var queryEmbedding = _embeddingService.GetEmbedding(query);
+
+                // Commit any pending changes
+                indexWriter.Commit();
+
+                using var reader = DirectoryReader.Open(indexDirectory);
+                if (reader.NumDocs == 0)
+                {
+                    Console.WriteLine("Index is empty. Please index some files first.");
+                    return results;
+                }
+
+                var searcher = new IndexSearcher(reader);
+                var chunkResults = new List<(Document doc, float similarity, string relevantText)>();
+
+                // Search through all documents
+                for (int i = 0; i < reader.MaxDoc; i++)
+                {
+                    Document doc;
+                    try
+                    {
+                        doc = reader.Document(i);
+                        if (doc == null) continue;
+                    }
+                    catch (Exception)
+                    {
+                        continue; // Skip deleted or inaccessible documents
+                    }
+                    var filePath = doc.Get("filepath");
+                    
+                    // Filter by specific file paths if provided
+                    if (filePaths != null && filePaths.Any())
+                    {
+                        bool matchesPath = filePaths.Any(fp => 
+                            Path.GetFileName(fp).Equals(doc.Get("filename"), StringComparison.OrdinalIgnoreCase) ||
+                            fp.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (!matchesPath) continue;
+                    }
+
+                    // Check for embeddings from OlamaApi indexing
+                    var embeddingBytes = doc.GetBinaryValue("content_embeddings");
+                    if (embeddingBytes != null)
+                    {
+                        try
+                        {
+                            var docEmbeddings = new float[embeddingBytes.Length / 4];
+                            Buffer.BlockCopy(embeddingBytes.Bytes, 0, docEmbeddings, 0, embeddingBytes.Length);
+                            
+                            var similarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, docEmbeddings);
+                            if (similarity > 0.1f) // Threshold for relevance
+                            {
+                                // Get relevant text snippet
+                                var content = doc.Get("content") ?? "";
+                                var relevantText = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
+                                chunkResults.Add((doc, similarity, relevantText));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error processing embeddings for document {i}: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: Generate embedding on-the-fly for documents without pre-computed embeddings
+                        var content = doc.Get("content");
+                        if (!string.IsNullOrEmpty(content))
+                        {
+                            try
+                            {
+                                var docEmbedding = _embeddingService.GetEmbedding(content.Length > 1000 ? content.Substring(0, 1000) : content);
+                                var similarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, docEmbedding);
+                                
+                                if (similarity > 0.1f)
+                                {
+                                    var relevantText = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
+                                    chunkResults.Add((doc, similarity, relevantText));
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Error generating on-the-fly embedding: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+
+                // Sort by similarity and take top results
+                var topResults = chunkResults
+                    .OrderByDescending(x => x.similarity)
+                    .Take(maxResults);
+
+                Console.WriteLine($"\nFound {chunkResults.Count} semantically relevant result(s):\n");
+
+                int resultCount = 0;
+                foreach (var (doc, similarity, relevantText) in topResults)
+                {
+                    resultCount++;
+                    var fileName = doc.Get("filename");
+                    var filePath = doc.Get("filepath");
+                    var date = doc.Get("indexed_date");
+
+                    // Get metadata
+                    var customerId = doc.Get("customer_id") ?? "";
+                    var customerName = doc.Get("customer_name") ?? "";
+                    var invoiceNumber = doc.Get("invoice_number") ?? "";
+                    var city = doc.Get("city") ?? "";
+                    var country = doc.Get("country") ?? "";
+                    var dateOfPurchase = doc.Get("date_of_purchase") ?? "";
+
+                    var snippets = GetAllContentSnippets(relevantText, query, 250);
+
+                    var resultModel = new SearchResultModel
+                    {
+                        FileName = fileName,
+                        FilePath = filePath,
+                        Score = similarity,
+                        Snippets = snippets,
+                        date = date,
+                        Metadata = new Dictionary<string, string>
+                        {
+                            ["CustomerID"] = customerId,
+                            ["CustomerName"] = customerName,
+                            ["InvoiceNumber"] = invoiceNumber,
+                            ["City"] = city,
+                            ["Country"] = country,
+                            ["DateOfPurchase"] = dateOfPurchase,
+                            ["SimilarityScore"] = similarity.ToString("F4"),
+                            ["RelevantText"] = relevantText
+                        }
+                    };
+
+                    results.Add(resultModel);
+                }
+
+                return results;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during semantic search: {ex.Message}");
+                // Fallback to keyword search
+                return SearchFiles(query);
+            }
+        }
+
         public bool IsFileIndexed(string filePath)
         {
             try
@@ -681,11 +1078,7 @@ namespace mvctest.Services
             return snippets;
         }
 
-        public string GetContentSnippet(string content, string query, int maxLength)
-        {
-            var snippets = GetAllContentSnippets(content, query, maxLength);
-            return snippets.FirstOrDefault() ?? "No content available.";
-        }
+   
 
         public void ShowIndexStats()
         {
@@ -783,12 +1176,473 @@ namespace mvctest.Services
             {
                 indexWriter?.Dispose();
                 analyzer?.Dispose();
+                _embeddingService?.Dispose();
                 Console.WriteLine("Lucene.NET resources cleaned up.");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error during cleanup: {ex.Message}");
             }
+        }
+
+        // Advanced query type detection for optimized high-resolution search
+        private string DetectHighResolutionQueryType(string query)
+        {
+            query = query.ToLower().Trim();
+            
+            if (query.StartsWith("word:"))
+                return "word";
+            else if (query.StartsWith("character:"))
+                return "character";
+            else if (query.StartsWith("ngram_text:"))
+                return "ngram_text";
+            else if (query.StartsWith("block_type:"))
+                return "block_type";
+            else if (query.Contains(":") && (query.Contains("category:") || query.Contains("description:") || query.Contains("value:") || query.Contains("status:") || query.Contains("customer_name:") || query.Contains("customer_id:")))
+                return "field_specific";
+            else
+                return "comprehensive";
+        }
+
+        private Query BuildComprehensiveQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+
+            // 1. Main document search (document_type:main) - Higher boost
+            var mainQuery = BuildMainDocumentQuery(query);
+            mainQuery.Boost = 3.0f;
+            booleanQuery.Add(mainQuery, Occur.SHOULD);
+
+            // 2. Word-level search (document_type:word) - Medium boost
+            var wordQuery = BuildWordLevelQuery(query);
+            wordQuery.Boost = 2.0f;
+            booleanQuery.Add(wordQuery, Occur.SHOULD);
+
+            // 3. N-gram search (document_type:ngram) - Medium boost for phrases
+            var ngramQuery = BuildNGramQuery(query);
+            ngramQuery.Boost = 2.0f;
+            booleanQuery.Add(ngramQuery, Occur.SHOULD);
+
+            // 4. Content block search (document_type:content_block) - Standard boost
+            var blockQuery = BuildContentBlockQuery(query);
+            blockQuery.Boost = 1.5f;
+            booleanQuery.Add(blockQuery, Occur.SHOULD);
+
+            // 5. Character-level search (document_type:character) - Lower boost for precision
+            if (query.Length <= 3) // Only for short queries to avoid noise
+            {
+                var charQuery = BuildCharacterLevelQuery(query);
+                charQuery.Boost = 1.0f;
+                booleanQuery.Add(charQuery, Occur.SHOULD);
+            }
+
+            return booleanQuery;
+        }
+
+        private Query BuildContentBlockTypeQuery(string blockType)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter
+            var docTypeQuery = new TermQuery(new Term("document_type", "content_block"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search for specific block type
+            var blockTypeQuery = new TermQuery(new Term("block_type", blockType));
+            booleanQuery.Add(blockTypeQuery, Occur.MUST);
+
+            return booleanQuery;
+        }
+
+        // High-resolution search query builders for OlamaApi compatibility
+        private Query BuildMainDocumentQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter
+            var docTypeQuery = new TermQuery(new Term("document_type", "main"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Add content search
+            var parser = new MultiFieldQueryParser(LuceneVersion, new[] { "content", "customer_name", "customer_id", "city", "country", "category", "description", "value", "status" }, analyzer);
+            
+            try
+            {
+                var contentQuery = parser.Parse(query);
+                booleanQuery.Add(contentQuery, Occur.MUST);
+            }
+            catch
+            {
+                // Fallback to simple term query
+                var termQuery = new TermQuery(new Term("content", query));
+                booleanQuery.Add(termQuery, Occur.MUST);
+            }
+
+            return booleanQuery;
+        }
+
+        private Query BuildWordLevelQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter
+            var docTypeQuery = new TermQuery(new Term("document_type", "word"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search in word fields
+            var wordQuery = new BooleanQuery();
+            wordQuery.Add(new TermQuery(new Term("word", query)), Occur.SHOULD);
+            wordQuery.Add(new TermQuery(new Term("normalized_word", query.ToLower())), Occur.SHOULD);
+            
+            booleanQuery.Add(wordQuery, Occur.MUST);
+            return booleanQuery;
+        }
+
+        private Query BuildCharacterLevelQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter
+            var docTypeQuery = new TermQuery(new Term("document_type", "character"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search for characters in the query
+            if (query.Length > 0)
+            {
+                var charQuery = new TermQuery(new Term("character", query.Substring(0, 1)));
+                booleanQuery.Add(charQuery, Occur.MUST);
+            }
+
+            return booleanQuery;
+        }
+
+        private Query BuildNGramQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter
+            var docTypeQuery = new TermQuery(new Term("document_type", "ngram"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search in n-gram text
+            var ngramQuery = new TermQuery(new Term("ngram_text", query.ToLower()));
+            booleanQuery.Add(ngramQuery, Occur.MUST);
+
+            return booleanQuery;
+        }
+
+        private Query BuildContentBlockQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter
+            var docTypeQuery = new TermQuery(new Term("document_type", "content_block"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search in block content
+            var parser = new QueryParser(LuceneVersion, "block_content", analyzer);
+            try
+            {
+                var blockQuery = parser.Parse(query);
+                booleanQuery.Add(blockQuery, Occur.MUST);
+            }
+            catch
+            {
+                var termQuery = new TermQuery(new Term("block_content", query));
+                booleanQuery.Add(termQuery, Occur.MUST);
+            }
+
+            return booleanQuery;
+        }
+
+        private Document FindMainDocument(IndexSearcher searcher, string filePath)
+        {
+            try
+            {
+                var query = new BooleanQuery();
+                query.Add(new TermQuery(new Term("document_type", "main")), Occur.MUST);
+                query.Add(new TermQuery(new Term("filepath", filePath)), Occur.MUST);
+
+                var hits = searcher.Search(query, 1).ScoreDocs;
+                if (hits.Length > 0)
+                {
+                    return searcher.Doc(hits[0].Doc);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error finding main document: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private SearchResultModel CreateSearchResultFromMainDoc(Document mainDoc, float score, string filePath, string fileName)
+        {
+            if (mainDoc == null)
+            {
+                return new SearchResultModel
+                {
+                    FileName = fileName ?? Path.GetFileName(filePath),
+                    FilePath = filePath,
+                    Score = score,
+                    Snippets = new List<string>(),
+                    date = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    Metadata = new Dictionary<string, string>()
+                };
+            }
+
+            var metadata = new Dictionary<string, string>();
+            
+            // Extract all available metadata from main document
+            var metadataFields = new[] { "customer_id", "customer_name", "invoice_number", "city", "country", "date_of_purchase", "total_words", "total_characters", "category", "description", "value", "status" };
+            
+            foreach (var field in metadataFields)
+            {
+                var value = mainDoc.Get(field);
+                if (!string.IsNullOrEmpty(value))
+                {
+                    metadata[field] = value;
+                }
+            }
+
+            return new SearchResultModel
+            {
+                FileName = mainDoc.Get("filename") ?? fileName,
+                FilePath = filePath,
+                Score = score,
+                Snippets = new List<string>(),
+                date = mainDoc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                Metadata = metadata
+            };
+        }
+
+        private void AddHighResolutionContext(SearchResultModel result, Document doc, string docType, string query)
+        {
+            try
+            {
+                switch (docType)
+                {
+                    case "word":
+                        AddWordContext(result, doc, query);
+                        break;
+                    case "character":
+                        AddCharacterContext(result, doc, query);
+                        break;
+                    case "ngram":
+                        AddNGramContext(result, doc, query);
+                        break;
+                    case "content_block":
+                        AddContentBlockContext(result, doc, query);
+                        break;
+                    case "main":
+                        AddMainDocumentContext(result, doc, query);
+                        break;
+                }
+
+                // Add document type information to metadata
+                if (!result.Metadata.ContainsKey("SearchType"))
+                {
+                    result.Metadata["SearchType"] = "High-Resolution";
+                }
+                
+                if (!result.Metadata.ContainsKey("DocumentType"))
+                {
+                    result.Metadata["DocumentType"] = docType;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error adding high-resolution context: {ex.Message}");
+            }
+        }
+
+        private void AddWordContext(SearchResultModel result, Document doc, string query)
+        {
+            var word = doc.Get("word");
+            var context = doc.Get("context");
+            var position = doc.Get("start_position");
+            var lineNumber = doc.Get("line_number");
+
+            if (!string.IsNullOrEmpty(word))
+            {
+                var snippet = $"Word: **{word}** at line {lineNumber}, position {position}";
+                if (!string.IsNullOrEmpty(context))
+                {
+                    snippet += $" - Context: {context}";
+                }
+                result.Snippets.Add(snippet);
+            }
+        }
+
+        private void AddCharacterContext(SearchResultModel result, Document doc, string query)
+        {
+            var character = doc.Get("character");
+            var frequency = doc.Get("frequency");
+            var positions = doc.Get("positions");
+
+            if (!string.IsNullOrEmpty(character))
+            {
+                var snippet = $"Character: **{character}** found {frequency} times";
+                if (!string.IsNullOrEmpty(positions))
+                {
+                    var posArray = positions.Split(',').Take(5);
+                    snippet += $" at positions: {string.Join(", ", posArray)}";
+                }
+                result.Snippets.Add(snippet);
+            }
+        }
+
+        private void AddNGramContext(SearchResultModel result, Document doc, string query)
+        {
+            var ngram = doc.Get("ngram_text");
+            var n = doc.Get("ngram_n");
+            var frequency = doc.Get("frequency");
+
+            if (!string.IsNullOrEmpty(ngram))
+            {
+                var snippet = $"{n}-gram: **{ngram}** (frequency: {frequency})";
+                result.Snippets.Add(snippet);
+            }
+        }
+
+        private void AddContentBlockContext(SearchResultModel result, Document doc, string query)
+        {
+            var blockContent = doc.Get("block_content");
+            var blockType = doc.Get("block_type");
+
+            if (!string.IsNullOrEmpty(blockContent))
+            {
+                var snippet = $"{blockType} block: {blockContent.Substring(0, Math.Min(200, blockContent.Length))}";
+                if (blockContent.Length > 200) snippet += "...";
+                
+                // Highlight the query term
+                snippet = snippet.Replace(query, $"**{query}**", StringComparison.OrdinalIgnoreCase);
+                result.Snippets.Add(snippet);
+            }
+        }
+
+        private void AddMainDocumentContext(SearchResultModel result, Document doc, string query)
+        {
+            var content = doc.Get("content");
+            if (!string.IsNullOrEmpty(content))
+            {
+                var snippets = GetAllContentSnippets(content, query, 250);
+                result.Snippets.AddRange(snippets);
+            }
+        }
+
+        // High-resolution Excel content extraction methods
+        private string ExtractStructuredExcelContent(string filePath)
+        {
+            try
+            {
+                using var package = new OfficeOpenXml.ExcelPackage(new FileInfo(filePath));
+                var contentBuilder = new StringBuilder();
+
+                foreach (var worksheet in package.Workbook.Worksheets)
+                {
+                    contentBuilder.AppendLine($"=== Sheet: {worksheet.Name} ===");
+                    
+                    if (worksheet.Dimension != null)
+                    {
+                        var startRow = worksheet.Dimension.Start.Row;
+                        var endRow = worksheet.Dimension.End.Row;
+                        var startCol = worksheet.Dimension.Start.Column;
+                        var endCol = worksheet.Dimension.End.Column;
+
+                        // Extract headers first
+                        var headers = new List<string>();
+                        for (int col = startCol; col <= endCol; col++)
+                        {
+                            var headerValue = worksheet.Cells[startRow, col].Text;
+                            headers.Add(string.IsNullOrEmpty(headerValue) ? $"Column{col}" : headerValue);
+                        }
+
+                        // Extract data rows
+                        for (int row = startRow + 1; row <= endRow; row++)
+                        {
+                            var rowData = new List<string>();
+                            for (int col = startCol; col <= endCol; col++)
+                            {
+                                var cellValue = worksheet.Cells[row, col].Text;
+                                rowData.Add(cellValue ?? "");
+                                
+                                // Create field-specific content for indexing
+                                if (!string.IsNullOrEmpty(cellValue) && col - startCol < headers.Count)
+                                {
+                                    var fieldName = headers[col - startCol].ToLower().Replace(" ", "_");
+                                    contentBuilder.AppendLine($"{fieldName}: {cellValue}");
+                                }
+                            }
+                            contentBuilder.AppendLine(string.Join(" | ", rowData));
+                        }
+                    }
+                }
+
+                return contentBuilder.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error extracting structured Excel content: {ex.Message}");
+                return FileTextExtractor.ExtractTextFromFile(filePath); // Fallback
+            }
+        }
+
+        private Dictionary<string, string> ExtractExcelFieldData(string filePath)
+        {
+            var fieldData = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                using var package = new OfficeOpenXml.ExcelPackage(new FileInfo(filePath));
+                
+                foreach (var worksheet in package.Workbook.Worksheets)
+                {
+                    if (worksheet.Dimension != null)
+                    {
+                        var startRow = worksheet.Dimension.Start.Row;
+                        var endRow = worksheet.Dimension.End.Row;
+                        var startCol = worksheet.Dimension.Start.Column;
+                        var endCol = worksheet.Dimension.End.Column;
+
+                        // Get headers
+                        var headers = new List<string>();
+                        for (int col = startCol; col <= endCol; col++)
+                        {
+                            var headerValue = worksheet.Cells[startRow, col].Text;
+                            headers.Add(string.IsNullOrEmpty(headerValue) ? $"Column{col}" : headerValue);
+                        }
+
+                        // Extract field data for each column
+                        for (int col = startCol; col <= endCol; col++)
+                        {
+                            var fieldName = headers[col - startCol].ToLower().Replace(" ", "_");
+                            var fieldValues = new List<string>();
+
+                            for (int row = startRow + 1; row <= endRow; row++)
+                            {
+                                var cellValue = worksheet.Cells[row, col].Text;
+                                if (!string.IsNullOrEmpty(cellValue))
+                                {
+                                    fieldValues.Add(cellValue);
+                                }
+                            }
+
+                            if (fieldValues.Any())
+                            {
+                                fieldData[fieldName] = string.Join(" ", fieldValues);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error extracting Excel field data: {ex.Message}");
+            }
+
+            return fieldData;
         }
 
         // IDisposable implementation

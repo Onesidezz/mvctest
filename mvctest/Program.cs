@@ -17,9 +17,12 @@ builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSet
 builder.Services.AddScoped<IContentManager, ContentManager>();
 builder.Services.AddScoped<IChatMLService, ChatMLService>();
 builder.Services.AddScoped<ICachedCount,CachedCount>();
+
+// Register enhanced Lucene services with high-resolution capabilities
 builder.Services.AddSingleton<ILuceneInterface, LuceneServices>();
 
-// Add these registrations in Program.cs
+// Register the high-resolution text analyzer
+builder.Services.AddSingleton<HighResolutionTextAnalyzer>();
 
 
 // ===== 4. Register HTTP & Session Services =====
