@@ -1,5 +1,6 @@
 ﻿using DocumentFormat.OpenXml.Drawing;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using mvctest.Models;
 using mvctest.Services;
 using System.IO.Compression;
@@ -12,11 +13,13 @@ namespace mvctest.Controllers
         private readonly ILuceneInterface _luceneInterface;
         private readonly IContentManager _contentManager;
         private readonly IChatMLService _chatMLService;
-        public ContentManagerController(IContentManager contentManager, ILuceneInterface luceneInterface, IChatMLService chatMLService)
+        private readonly AppSettings _appSettings;
+        public ContentManagerController(IContentManager contentManager, ILuceneInterface luceneInterface, IChatMLService chatMLService, IOptions<AppSettings> appSettings)
         {
             _contentManager = contentManager;
             _luceneInterface = luceneInterface;
             _chatMLService = chatMLService;
+            _appSettings = appSettings.Value;
         }
 
         public IActionResult Index(int page = 1, int pageSize = 10)

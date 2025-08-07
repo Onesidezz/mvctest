@@ -9,11 +9,6 @@ namespace mvctest.Controllers
 {
     public partial class ContentManagerController
     {
-        private readonly AppSettings _appSettings;
-        public ContentManagerController(IOptions< AppSettings> appSettings)
-        {
-            _appSettings = appSettings.Value;
-        }
         private async Task<float> CalculateContentRelevance(string query, string content)
         {
             try
