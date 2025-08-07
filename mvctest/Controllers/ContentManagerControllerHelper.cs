@@ -2,11 +2,18 @@ using mvctest.Services;
 using System.Text;
 using System.Text.Json;
 using System.Net.Http;
+using mvctest.Models;
+using Microsoft.Extensions.Options;
 
 namespace mvctest.Controllers
 {
     public partial class ContentManagerController
     {
+        private readonly AppSettings _appSettings;
+        public ContentManagerController(IOptions< AppSettings> appSettings)
+        {
+            _appSettings = appSettings.Value;
+        }
         private async Task<float> CalculateContentRelevance(string query, string content)
         {
             try
@@ -159,7 +166,7 @@ Answer:";
             try
             {
                 using var httpClient = new HttpClient();
-                httpClient.DefaultRequestHeaders.Add("Authorization", "Bearer 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");
+                httpClient.DefaultRequestHeaders.Add("Authorization",_appSettings.HuggingFaceAccessToken);
                 
                 var requestBody = new
                 {
