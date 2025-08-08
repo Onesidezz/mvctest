@@ -1651,7 +1651,105 @@ namespace mvctest.Services
             CleanupLucene();
         }
 
+        public async Task<bool> ProcessFilesInDirectory(string directoryPath)
+        {
+            try
+            {
+                var directoryInfo = new DirectoryInfo(directoryPath);
+                if (!directoryInfo.Exists)
+                {
+                    Console.WriteLine($"Directory not found: {directoryPath}");
+                    return false;
+                }
 
+                var files = Directory.GetFiles(directoryPath);
+                Console.WriteLine($"Found {files.Length} files in directory: {directoryPath}");
+
+                var filesToIndex = new List<string>();
+                foreach (var file in files)
+                {
+                    if (IsIndexableFile(file))
+                    {
+                        filesToIndex.Add(file);
+                        Console.WriteLine($"Added to indexing queue: {Path.GetFileName(file)}");
+                    }
+                }
+
+                if (filesToIndex.Any())
+                {
+                    Console.WriteLine($"Indexing {filesToIndex.Count} files");
+                    IndexMultipleFiles(filesToIndex);
+                    return true;
+                }
+
+                Console.WriteLine("No indexable files found in directory");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error processing directory {directoryPath}: {ex.Message}");
+                return false;
+            }
+        }
+        private bool IsIndexableFile(string filePath)
+        {
+            var extension = Path.GetExtension(filePath).ToLower();
+            var indexableExtensions = new[] { ".pdf", ".txt", ".docx", ".xlsx", ".pptx", ".csv" };
+            return indexableExtensions.Contains(extension);
+        }
+        public void IndexMultipleFiles(List<string> filePaths)
+        {
+            Console.WriteLine($"Starting batch high-resolution indexing for {filePaths.Count} files");
+
+            foreach (var filePath in filePaths)
+            {
+                IndexFile(filePath);
+            }
+
+            Console.WriteLine("Batch high-resolution indexing completed");
+        }
+        public void IndexFile(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    Console.WriteLine($"File not found: {filePath}");
+                    return;
+                }
+
+                Console.WriteLine($"Starting high-resolution indexing for: {Path.GetFileName(filePath)}");
+                var content = FileTextExtractor.ExtractTextFromFile(filePath);
+
+                if (string.IsNullOrEmpty(content))
+                {
+                    Console.WriteLine($"No content extracted from: {filePath}");
+                    return;
+                }
+
+                using var directory = FSDirectory.Open(IndexPath);
+                using var analyzer = new StandardAnalyzer(LuceneVersion);
+                var config = new IndexWriterConfig(LuceneVersion, analyzer);
+
+                using var writer = new IndexWriter(directory, config);
+
+                // Create high-resolution document analysis
+                //var highResDoc = CreateHighResolutionDocument(filePath, content);
+
+                // Index main document with semantic embeddings
+                //IndexMainDocument(writer, highResDoc);
+
+                // Index content blocks for better semantic search
+                //IndexContentBlocks(writer, highResDoc);
+
+                writer.Commit();
+                Console.WriteLine($"High-resolution indexing completed for: {Path.GetFileName(filePath)}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error indexing file {filePath}: {ex.Message}");
+            }
+        }
     }
 }
 

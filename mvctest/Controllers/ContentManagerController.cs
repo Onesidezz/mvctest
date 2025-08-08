@@ -1,10 +1,8 @@
-﻿using DocumentFormat.OpenXml.Drawing;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using mvctest.Models;
 using mvctest.Services;
 using System.IO.Compression;
-using System.Text;
 
 namespace mvctest.Controllers
 {
@@ -452,93 +450,6 @@ namespace mvctest.Controllers
                 Console.WriteLine($"DeepContentSearch error: {ex.Message}");
                 TempData["ErrorMessage"] = $"Failed to perform optimized content search: {ex.Message}";
                 return RedirectToAction("Error", "Home", new { message = ex.Message });
-            }
-        }
-
-        private async Task ProcessDocumentWithContentBlocks(string filePath, string content, string query, float[] queryEmbedding, TextEmbeddingService embeddingService, List<(string filePath, float similarity, List<string> relevantChunks, string documentType)> semanticMatches)
-        {
-            // 1. Process main document (like IndexMainDocument in OlamaApi)
-            await ProcessMainDocument(filePath, content, queryEmbedding, embeddingService, semanticMatches);
-
-            // 2. Process content blocks (like IndexContentBlocks in OlamaApi)
-            await ProcessContentBlocks(filePath, content, queryEmbedding, embeddingService, semanticMatches);
-        }
-
-        private async Task ProcessMainDocument(string filePath, string content, float[] queryEmbedding, TextEmbeddingService embeddingService, List<(string filePath, float similarity, List<string> relevantChunks, string documentType)> semanticMatches)
-        {
-            try
-            {
-                // Generate embedding for entire document content
-                var documentEmbedding = embeddingService?.GetEmbedding(content);
-                if (documentEmbedding != null && queryEmbedding != null)
-                {
-                    var similarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, documentEmbedding);
-
-                    // Consider main document relevant if similarity above threshold
-                    if (similarity > 0.25f) // Lower threshold for main documents
-                    {
-                        var relevantChunks = new List<string> { content.Substring(0, Math.Min(1000, content.Length)) }; // First 1000 chars
-                        semanticMatches.Add((filePath, similarity, relevantChunks, "main"));
-                        Console.WriteLine($"✓ Found main document match in {System.IO.Path.GetFileName(filePath)} (similarity: {similarity:F3})");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error processing main document {filePath}: {ex.Message}");
-            }
-        }
-
-        private async Task ProcessContentBlocks(string filePath, string content, float[] queryEmbedding, TextEmbeddingService embeddingService, List<(string filePath, float similarity, List<string> relevantChunks, string documentType)> semanticMatches)
-        {
-            try
-            {
-                // Split into paragraphs (like IdentifyContentBlocks in OlamaApi)
-                var paragraphs = content.Split(new[] { "\n\n", "\r\n\r\n" }, StringSplitOptions.RemoveEmptyEntries);
-
-                foreach (var paragraph in paragraphs)
-                {
-                    if (!string.IsNullOrWhiteSpace(paragraph) && paragraph.Trim().Length > 50)
-                    {
-                        var paragraphEmbedding = embeddingService?.GetEmbedding(paragraph.Trim());
-                        if (paragraphEmbedding != null && queryEmbedding != null)
-                        {
-                            var similarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, paragraphEmbedding);
-
-                            if (similarity > 0.3f) // Higher threshold for content blocks
-                            {
-                                var relevantChunks = new List<string> { paragraph.Trim() };
-                                semanticMatches.Add((filePath, similarity, relevantChunks, "content_block"));
-                                Console.WriteLine($"✓ Found content block match in {System.IO.Path.GetFileName(filePath)} (similarity: {similarity:F3})");
-                            }
-                        }
-                    }
-                }
-
-                // Split into sentences as well
-                var sentences = content.Split(new[] { '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Where(s => !string.IsNullOrWhiteSpace(s) && s.Trim().Length > 20)
-                    .ToArray();
-
-                foreach (var sentence in sentences)
-                {
-                    var sentenceEmbedding = embeddingService?.GetEmbedding(sentence.Trim());
-                    if (sentenceEmbedding != null && queryEmbedding != null)
-                    {
-                        var similarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, sentenceEmbedding);
-
-                        if (similarity > 0.35f) // Even higher threshold for sentences
-                        {
-                            var relevantChunks = new List<string> { sentence.Trim() };
-                            semanticMatches.Add((filePath, similarity, relevantChunks, "sentence"));
-                            Console.WriteLine($"✓ Found sentence match in {System.IO.Path.GetFileName(filePath)} (similarity: {similarity:F3})");
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error processing content blocks for {filePath}: {ex.Message}");
             }
         }
     }

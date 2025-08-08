@@ -14,5 +14,7 @@ namespace mvctest.Services
         void CleanupLucene();
         void BatchIndexFilesFromContentManager(List<string> directories);
         void CommitIndex();
+        Task<bool> ProcessFilesInDirectory(string directoryPath);
+
     }
 }
