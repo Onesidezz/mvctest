@@ -30,20 +30,17 @@ namespace mvctest.Services
                 // Create input tensors
                 var inputIds = new DenseTensor<long>(new[] { 1, tokens.Length });
                 var attentionMask = new DenseTensor<long>(new[] { 1, tokens.Length });
-                var tokenTypeIds = new DenseTensor<long>(new[] { 1, tokens.Length }); // Add token_type_ids
 
                 for (int i = 0; i < tokens.Length; i++)
                 {
                     inputIds[0, i] = tokens[i];
                     attentionMask[0, i] = 1;
-                    tokenTypeIds[0, i] = 0; // All tokens belong to the same segment
                 }
 
                 var inputs = new List<NamedOnnxValue>
                 {
                     NamedOnnxValue.CreateFromTensor("input_ids", inputIds),
-                    NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask),
-                    NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIds)
+                    NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask)
                 };
 
                 using var results = _session.Run(inputs);
@@ -53,7 +50,7 @@ namespace mvctest.Services
                 if (output == null)
                 {
                     Console.WriteLine("No output from ONNX model");
-                    return new float[384];
+                    return new float[768];
                 }
 
                 var embeddings = output.AsTensor<float>();
@@ -92,14 +89,14 @@ namespace mvctest.Services
                 else
                 {
                     Console.WriteLine($"Unexpected embedding shape: {string.Join(",", embeddings.Dimensions.ToArray())}");
-                    return new float[384];
+                    return new float[768];
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error generating embedding: {ex.Message}");
                 // Return zero vector as fallback
-                return new float[384]; // Common embedding size
+                return new float[768]; // Common embedding size
             }
         }
 

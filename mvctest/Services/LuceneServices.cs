@@ -487,13 +487,13 @@ namespace mvctest.Services
                 var searcher = new IndexSearcher(reader);
 
                 //// Enhanced search to handle all OlamaApi high-resolution document types
-                //var results = SearchHighResolutionIndex(searcher, query);
-                
-                //if (results.Any())
-                //{
-                //    Console.WriteLine($"Found {results.Count} high-resolution results");
-                //    return results;
-                //}
+                var results = SearchHighResolutionIndex(searcher, query);
+
+                if (results.Any())
+                {
+                    Console.WriteLine($"Found {results.Count} high-resolution results");
+                    return results;
+                }
 
                 // Fallback to standard search if no high-resolution results found
                 return SearchStandardIndex(searcher, query);
