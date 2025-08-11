@@ -7,6 +7,7 @@ namespace mvctest.Services
         void ClearIndex(string confirmation);
         void InitializeLucene();
         List<SearchResultModel> SearchFiles(string query);
+        List<SearchResultModel> SearchFilesInPaths(string query, List<string> filePaths);
         List<SearchResultModel> SemanticSearch(string query, List<string> filePaths = null, int maxResults = 10);
         void IndexFilesInternal(List<string> filesToIndex, bool forceReindex);
         List<string> GetAllContentSnippets(string content, string query, int maxLength);

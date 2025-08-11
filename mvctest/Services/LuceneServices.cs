@@ -486,17 +486,107 @@ namespace mvctest.Services
 
                 var searcher = new IndexSearcher(reader);
 
-                //// Enhanced search to handle all OlamaApi high-resolution document types
-                var results = SearchHighResolutionIndex(searcher, query);
-
-                if (results.Any())
+                // Try comprehensive search first (includes sentences and regular documents)
+                var comprehensiveQuery = BuildComprehensiveQuery(query);
+                var hits = searcher.Search(comprehensiveQuery, 50).ScoreDocs;
+                
+                if (hits.Length > 0)
                 {
-                    Console.WriteLine($"Found {results.Count} high-resolution results");
-                    return results;
+                    Console.WriteLine($"Found {hits.Length} comprehensive search results");
+                    
+                    // Group results by file path to combine multiple sentences from the same file
+                    var groupedResults = new Dictionary<string, SearchResultModel>();
+                    
+                    foreach (var hit in hits)
+                    {
+                        var doc = searcher.Doc(hit.Doc);
+                        var docType = doc.Get("doc_type") ?? "document";
+                        
+                        if (docType == "sentence")
+                        {
+                            // Handle sentence results - get parent document info
+                            var parentFile = doc.Get("parent_file") ?? "";
+                            var parentFilename = doc.Get("parent_filename") ?? "";
+                            var sentenceContent = doc.Get("sentence_content") ?? "";
+                            var sentenceIndex = doc.Get("sentence_index") ?? "0";
+                            
+                            // Highlight the sentence content
+                            var highlightedSentence = sentenceContent;
+                            var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                            foreach (var word in queryWords)
+                            {
+                                var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
+                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                highlightedSentence = regex.Replace(highlightedSentence, $"<strong>$0</strong>");
+                            }
+                            
+                            // Group by file path
+                            if (groupedResults.ContainsKey(parentFile))
+                            {
+                                // Add sentence to existing file result
+                                groupedResults[parentFile].Snippets.Add($"Sentence {sentenceIndex}: {highlightedSentence}");
+                                // Update score to highest score among sentences
+                                if (hit.Score > groupedResults[parentFile].Score)
+                                {
+                                    groupedResults[parentFile].Score = hit.Score;
+                                }
+                            }
+                            else
+                            {
+                                // Create new file result
+                                groupedResults[parentFile] = new SearchResultModel
+                                {
+                                    FileName = parentFilename,
+                                    FilePath = parentFile,
+                                    Score = hit.Score,
+                                    Snippets = new List<string> { $"Sentence {sentenceIndex}: {highlightedSentence}" },
+                                    date = doc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd")
+                                };
+                            }
+                        }
+                        else
+                        {
+                            // Handle regular document results
+                            var fileName = doc.Get("filename") ?? "";
+                            var filePath = doc.Get("filepath") ?? "";
+                            var content = doc.Get("content") ?? "";
+                            
+                            // Create highlighted snippets using GetAllContentSnippets - returns multiple snippets for multiple matches
+                            var snippets = GetAllContentSnippets(content, query, 250);
+                            
+                            // Group by file path
+                            if (groupedResults.ContainsKey(filePath))
+                            {
+                                // Add snippets to existing file result
+                                groupedResults[filePath].Snippets.AddRange(snippets);
+                                // Update score to highest score
+                                if (hit.Score > groupedResults[filePath].Score)
+                                {
+                                    groupedResults[filePath].Score = hit.Score;
+                                }
+                            }
+                            else
+                            {
+                                // Create new file result
+                                groupedResults[filePath] = new SearchResultModel
+                                {
+                                    FileName = fileName,
+                                    FilePath = filePath,
+                                    Score = hit.Score,
+                                    Snippets = snippets,
+                                    date = doc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd")
+                                };
+                            }
+                        }
+                    }
+                    
+                    // Convert grouped results to list
+                    resultList = groupedResults.Values.OrderByDescending(r => r.Score).ToList();
+                    return resultList;
                 }
 
-                // Fallback to standard search if no high-resolution results found
-                return SearchStandardIndex(searcher, query);
+                Console.WriteLine("No results found with comprehensive search");
+                return resultList;
             }
             catch (IndexNotFoundException ex)
             {
@@ -509,6 +599,230 @@ namespace mvctest.Services
                 Console.WriteLine($"Error during search: {ex.Message}");
                 return resultList;
             }
+        }
+
+        public List<SearchResultModel> SearchFilesInPaths(string query, List<string> filePaths)
+        {
+            var resultList = new List<SearchResultModel>();
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                Console.WriteLine("Please enter a valid search query.");
+                return resultList;
+            }
+
+            if (filePaths == null || !filePaths.Any())
+            {
+                Console.WriteLine("No file paths provided for targeted search.");
+                return resultList;
+            }
+
+            try
+            {
+                // First, check if index exists and has content
+                var indexDirectory = FSDirectory.Open(IndexPath);
+
+                if (!DirectoryReader.IndexExists(indexDirectory))
+                {
+                    Console.WriteLine("Index does not exist. Please index some files first.");
+                    return resultList;
+                }
+
+                // Commit any pending changes to ensure index is up to date
+                indexWriter.Commit();
+
+                // ALWAYS create a fresh reader for search to see latest changes
+                using var reader = DirectoryReader.Open(indexDirectory);
+
+                // Check if index has any documents
+                if (reader.NumDocs == 0)
+                {
+                    Console.WriteLine("Index is empty. Please index some files first.");
+                    return resultList;
+                }
+
+                var searcher = new IndexSearcher(reader);
+
+                // Build comprehensive query with file path filtering
+                var comprehensiveQuery = BuildComprehensiveQueryWithPathFilter(query, filePaths);
+                var hits = searcher.Search(comprehensiveQuery, 50).ScoreDocs;
+                
+                if (hits.Length > 0)
+                {
+                    Console.WriteLine($"Found {hits.Length} targeted search results in specified paths");
+                    
+                    // Group results by file path to combine multiple sentences from the same file
+                    var groupedResults = new Dictionary<string, SearchResultModel>();
+                    
+                    foreach (var hit in hits)
+                    {
+                        var doc = searcher.Doc(hit.Doc);
+                        var docType = doc.Get("doc_type") ?? "document";
+                        
+                        if (docType == "sentence")
+                        {
+                            // Handle sentence results - get parent document info
+                            var parentFile = doc.Get("parent_file") ?? "";
+                            var parentFilename = doc.Get("parent_filename") ?? "";
+                            var sentenceContent = doc.Get("sentence_content") ?? "";
+                            var sentenceIndex = doc.Get("sentence_index") ?? "0";
+                            
+                            // Highlight the sentence content
+                            var highlightedSentence = sentenceContent;
+                            var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                            foreach (var word in queryWords)
+                            {
+                                var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
+                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                highlightedSentence = regex.Replace(highlightedSentence, $"<strong>$0</strong>");
+                            }
+                            
+                            // Group by file path
+                            if (groupedResults.ContainsKey(parentFile))
+                            {
+                                // Add sentence to existing file result
+                                groupedResults[parentFile].Snippets.Add($"Sentence {sentenceIndex}: {highlightedSentence}");
+                                // Update score to highest score among sentences
+                                if (hit.Score > groupedResults[parentFile].Score)
+                                {
+                                    groupedResults[parentFile].Score = hit.Score;
+                                }
+                            }
+                            else
+                            {
+                                // Create new file result
+                                groupedResults[parentFile] = new SearchResultModel
+                                {
+                                    FileName = parentFilename,
+                                    FilePath = parentFile,
+                                    Score = hit.Score,
+                                    Snippets = new List<string> { $"Sentence {sentenceIndex}: {highlightedSentence}" },
+                                    date = doc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd")
+                                };
+                            }
+                        }
+                        else
+                        {
+                            // Handle regular document results
+                            var fileName = doc.Get("filename") ?? "";
+                            var filePath = doc.Get("filepath") ?? "";
+                            var content = doc.Get("content") ?? "";
+                            
+                            // Create highlighted snippets using the same method as SearchFiles
+                            var snippets = GetAllContentSnippets(content, query, 500);
+                            
+                            // Group by file path
+                            if (groupedResults.ContainsKey(filePath))
+                            {
+                                // Add snippets to existing file result
+                                groupedResults[filePath].Snippets.AddRange(snippets);
+                                // Update score to highest score
+                                if (hit.Score > groupedResults[filePath].Score)
+                                {
+                                    groupedResults[filePath].Score = hit.Score;
+                                }
+                            }
+                            else
+                            {
+                                // Create new file result
+                                groupedResults[filePath] = new SearchResultModel
+                                {
+                                    FileName = fileName,
+                                    FilePath = filePath,
+                                    Score = hit.Score,
+                                    Snippets = snippets,
+                                    date = doc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd")
+                                };
+                            }
+                        }
+                    }
+                    
+                    // Convert grouped results to list
+                    resultList = groupedResults.Values.OrderByDescending(r => r.Score).ToList();
+                    return resultList;
+                }
+
+                Console.WriteLine("No results found with targeted path search");
+                return resultList;
+            }
+            catch (IndexNotFoundException ex)
+            {
+                Console.WriteLine("Index not found. Please index some files first.");
+                Console.WriteLine($"Index path: {IndexPath}");
+                return resultList;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during targeted path search: {ex.Message}");
+                return resultList;
+            }
+        }
+
+        private Query BuildComprehensiveQueryWithPathFilter(string query, List<string> filePaths)
+        {
+            var mainBooleanQuery = new BooleanQuery();
+
+            // Create file path filter using BooleanQuery for multiple paths
+            var pathFilterQuery = new BooleanQuery();
+            
+            foreach (var filePath in filePaths)
+            {
+                // Create queries for both exact path matches and filename matches
+                var exactPathQuery = new TermQuery(new Term("filepath", filePath));
+                var filenameQuery = new TermQuery(new Term("filename", Path.GetFileName(filePath)));
+                var parentFileQuery = new TermQuery(new Term("parent_file", filePath)); // For sentence documents
+                
+                var pathQuery = new BooleanQuery();
+                pathQuery.Add(exactPathQuery, Occur.SHOULD);
+                pathQuery.Add(filenameQuery, Occur.SHOULD);
+                pathQuery.Add(parentFileQuery, Occur.SHOULD);
+                
+                pathFilterQuery.Add(pathQuery, Occur.SHOULD);
+            }
+
+            // Add path filter as mandatory
+            mainBooleanQuery.Add(pathFilterQuery, Occur.MUST);
+
+            // Build the same comprehensive content search as original SearchFiles method
+            var contentBooleanQuery = new BooleanQuery();
+
+            // 1. Search in regular document content - High boost
+            var parser = new QueryParser(LuceneVersion, "content", analyzer);
+            try
+            {
+                var contentQuery = parser.Parse(query);
+                contentQuery.Boost = 3.0f;
+                contentBooleanQuery.Add(contentQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                var contentTermQuery = new TermQuery(new Term("content", query));
+                contentTermQuery.Boost = 3.0f;
+                contentBooleanQuery.Add(contentTermQuery, Occur.SHOULD);
+            }
+
+            // 2. Search in filename - Medium boost
+            try
+            {
+                var filenameQuery = parser.Parse($"filename:({query})");
+                filenameQuery.Boost = 2.0f;
+                contentBooleanQuery.Add(filenameQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                var filenameTermQuery = new TermQuery(new Term("filename", query));
+                filenameTermQuery.Boost = 2.0f;
+                contentBooleanQuery.Add(filenameTermQuery, Occur.SHOULD);
+            }
+
+            // 3. Sentence-level search - High boost for precise matches
+            var sentenceQuery = BuildSentenceQuery(query);
+            sentenceQuery.Boost = 2.5f;
+            contentBooleanQuery.Add(sentenceQuery, Occur.SHOULD);
+
+            // Add content search queries
+            mainBooleanQuery.Add(contentBooleanQuery, Occur.MUST);
+
+            return mainBooleanQuery;
         }
 
         private List<SearchResultModel> SearchHighResolutionIndex(IndexSearcher searcher, string query)
@@ -553,8 +867,14 @@ namespace mvctest.Services
                         Console.WriteLine($"Executing field-specific search for: {query}");
                         break;
                         
+                    case "sentence":
+                        var sentenceTerm = query.Substring(9); // Remove "sentence:" prefix
+                        finalQuery = BuildSentenceQuery(sentenceTerm);
+                        Console.WriteLine($"Executing sentence-level search for: {sentenceTerm}");
+                        break;
+                        
                     default:
-                        // Comprehensive multi-layer search
+                        // Comprehensive multi-layer search (now includes sentence search)
                         finalQuery = BuildComprehensiveQuery(query);
                         Console.WriteLine($"Executing comprehensive high-resolution search for: {query}");
                         break;
@@ -877,7 +1197,8 @@ namespace mvctest.Services
                             {
                                 // Get relevant text snippet
                                 var content = doc.Get("content") ?? "";
-                                var relevantText = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
+                                // Use full content for complete indexing
+                                var relevantText = content;
                                 chunkResults.Add((doc, similarity, relevantText));
                             }
                         }
@@ -894,12 +1215,14 @@ namespace mvctest.Services
                         {
                             try
                             {
-                                var docEmbedding = _embeddingService.GetEmbedding(content.Length > 1000 ? content.Substring(0, 1000) : content);
+                                // Use full content for complete semantic understanding
+                                var docEmbedding = _embeddingService.GetEmbedding(content);
                                 var similarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, docEmbedding);
                                 
                                 if (similarity > 0.1f)
                                 {
-                                    var relevantText = content.Length > 500 ? content.Substring(0, 500) + "..." : content;
+                                    // Use full content for complete indexing
+                                var relevantText = content;
                                     chunkResults.Add((doc, similarity, relevantText));
                                 }
                             }
@@ -1001,30 +1324,43 @@ namespace mvctest.Services
                 return snippets;
             }
 
-            var queryWords = query.ToLower().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var contentLower = content.ToLower();
+            var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var foundPositions = new List<int>();
 
+            // Use regex to find word boundary matches for each query word
             foreach (var word in queryWords)
             {
-                int index = 0;
-                while ((index = contentLower.IndexOf(word, index)) != -1)
+                var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                
+                var matches = regex.Matches(content);
+                foreach (System.Text.RegularExpressions.Match match in matches)
                 {
-                    foundPositions.Add(index);
-                    index += word.Length;
+                    foundPositions.Add(match.Index);
                 }
             }
 
             if (foundPositions.Count == 0)
             {
-                var fallback = content.Length <= maxLength ? content : content.Substring(0, maxLength) + "...";
-                snippets.Add(fallback);
+                // If no word boundary matches found, create a basic snippet with highlighting attempt
+                var basicSnippet = content.Length > maxLength ? content.Substring(0, maxLength) + "..." : content;
+                
+                // Try to highlight anyway (might catch partial matches)
+                foreach (var word in queryWords)
+                {
+                    var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    basicSnippet = regex.Replace(basicSnippet, $"<strong>$0</strong>");
+                }
+                
+                snippets.Add(basicSnippet);
                 return snippets;
             }
 
             foundPositions.Sort();
             var filteredPositions = new List<int>();
 
+            // Filter out positions that are too close to each other
             foreach (var pos in foundPositions)
             {
                 bool tooClose = false;
@@ -1042,37 +1378,30 @@ namespace mvctest.Services
                 }
             }
 
-            foreach (var position in filteredPositions)
+            // Create snippets around each found position
+            foreach (var position in filteredPositions.Take(5)) // Limit to 5 snippets max
             {
-                int start = position;
-                while (start > 0 && content[start] != '.' && start > position - maxLength)
-                    start--;
+                int start = Math.Max(0, position - maxLength / 2);
+                int end = Math.Min(content.Length, position + maxLength / 2);
 
-                int end = position;
-                while (end < content.Length && content[end] != '.' && end < position + maxLength)
-                    end++;
+                var snippet = content.Substring(start, end - start).Trim();
 
-                start = Math.Max(0, start);
-                end = Math.Min(content.Length - 1, end);
-
-                var snippet = content.Substring(start, end - start + 1).Trim();
-
-                if (snippet.Length > maxLength)
-                {
-                    snippet = snippet.Substring(0, maxLength) + "...";
-                }
-
+                // Add ellipsis if needed
                 if (start > 0) snippet = "..." + snippet;
-                if (end < content.Length - 1) snippet += "...";
+                if (end < content.Length) snippet += "...";
 
+                // Highlight all query words in this snippet
                 foreach (var word in queryWords)
                 {
                     var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    snippet = regex.Replace(snippet, $"**{word.ToUpper()}**");
+                    snippet = regex.Replace(snippet, $"<strong>$0</strong>");
                 }
 
-                snippets.Add(snippet);
+                if (!snippets.Contains(snippet)) // Avoid duplicates
+                {
+                    snippets.Add(snippet);
+                }
             }
 
             return snippets;
@@ -1198,6 +1527,8 @@ namespace mvctest.Services
                 return "ngram_text";
             else if (query.StartsWith("block_type:"))
                 return "block_type";
+            else if (query.StartsWith("sentence:"))
+                return "sentence";
             else if (query.Contains(":") && (query.Contains("category:") || query.Contains("description:") || query.Contains("value:") || query.Contains("status:") || query.Contains("customer_name:") || query.Contains("customer_id:")))
                 return "field_specific";
             else
@@ -1208,33 +1539,39 @@ namespace mvctest.Services
         {
             var booleanQuery = new BooleanQuery();
 
-            // 1. Main document search (document_type:main) - Higher boost
-            var mainQuery = BuildMainDocumentQuery(query);
-            mainQuery.Boost = 3.0f;
-            booleanQuery.Add(mainQuery, Occur.SHOULD);
-
-            // 2. Word-level search (document_type:word) - Medium boost
-            var wordQuery = BuildWordLevelQuery(query);
-            wordQuery.Boost = 2.0f;
-            booleanQuery.Add(wordQuery, Occur.SHOULD);
-
-            // 3. N-gram search (document_type:ngram) - Medium boost for phrases
-            var ngramQuery = BuildNGramQuery(query);
-            ngramQuery.Boost = 2.0f;
-            booleanQuery.Add(ngramQuery, Occur.SHOULD);
-
-            // 4. Content block search (document_type:content_block) - Standard boost
-            var blockQuery = BuildContentBlockQuery(query);
-            blockQuery.Boost = 1.5f;
-            booleanQuery.Add(blockQuery, Occur.SHOULD);
-
-            // 5. Character-level search (document_type:character) - Lower boost for precision
-            if (query.Length <= 3) // Only for short queries to avoid noise
+            // 1. Search in regular document content - High boost
+            var parser = new QueryParser(LuceneVersion, "content", analyzer);
+            try
             {
-                var charQuery = BuildCharacterLevelQuery(query);
-                charQuery.Boost = 1.0f;
-                booleanQuery.Add(charQuery, Occur.SHOULD);
+                var contentQuery = parser.Parse(query);
+                contentQuery.Boost = 3.0f;
+                booleanQuery.Add(contentQuery, Occur.SHOULD);
             }
+            catch
+            {
+                var contentTermQuery = new TermQuery(new Term("content", query));
+                contentTermQuery.Boost = 3.0f;
+                booleanQuery.Add(contentTermQuery, Occur.SHOULD);
+            }
+
+            // 2. Search in filename - Medium boost
+            try
+            {
+                var filenameQuery = parser.Parse($"filename:({query})");
+                filenameQuery.Boost = 2.0f;
+                booleanQuery.Add(filenameQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                var filenameTermQuery = new TermQuery(new Term("filename", query));
+                filenameTermQuery.Boost = 2.0f;
+                booleanQuery.Add(filenameTermQuery, Occur.SHOULD);
+            }
+
+            // 3. Sentence-level search - High boost for precise matches
+            var sentenceQuery = BuildSentenceQuery(query);
+            sentenceQuery.Boost = 2.5f;
+            booleanQuery.Add(sentenceQuery, Occur.SHOULD);
 
             return booleanQuery;
         }
@@ -1349,6 +1686,40 @@ namespace mvctest.Services
             catch
             {
                 var termQuery = new TermQuery(new Term("block_content", query));
+                booleanQuery.Add(termQuery, Occur.MUST);
+            }
+
+            return booleanQuery;
+        }
+        
+        /// <summary>
+        /// Build query for searching sentence-level content
+        /// </summary>
+        private Query BuildSentenceQuery(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter for sentences
+            var docTypeQuery = new TermQuery(new Term("doc_type", "sentence"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search in sentence content with phrase matching
+            var parser = new QueryParser(LuceneVersion, "sentence_content", analyzer);
+            try
+            {
+                // Try to parse as a phrase query first for better sentence matching
+                var sentenceQuery = parser.Parse($"\"{query}\"");
+                booleanQuery.Add(sentenceQuery, Occur.SHOULD);
+                
+                // Also add fuzzy matching for partial matches
+                var fuzzyQuery = parser.Parse(query);
+                fuzzyQuery.Boost = 0.7f; // Lower boost for fuzzy matches
+                booleanQuery.Add(fuzzyQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                // Fallback to term query
+                var termQuery = new TermQuery(new Term("sentence_content", query));
                 booleanQuery.Add(termQuery, Occur.MUST);
             }
 
@@ -1710,6 +2081,7 @@ namespace mvctest.Services
         }
         public void IndexFile(string filePath)
         {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 if (!File.Exists(filePath))
@@ -1718,8 +2090,13 @@ namespace mvctest.Services
                     return;
                 }
 
-                Console.WriteLine($"Starting high-resolution indexing for: {Path.GetFileName(filePath)}");
+                Console.WriteLine($"⏱️ Starting OPTIMIZED indexing for: {Path.GetFileName(filePath)}");
+                
+                // ===== CONTENT EXTRACTION TIMING =====
+                var extractionStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 var content = FileTextExtractor.ExtractTextFromFile(filePath);
+                extractionStopwatch.Stop();
+                Console.WriteLine($"📄 Content extraction completed in: {extractionStopwatch.ElapsedMilliseconds:N0} ms");
 
                 if (string.IsNullOrEmpty(content))
                 {
@@ -1727,28 +2104,231 @@ namespace mvctest.Services
                     return;
                 }
 
-                using var directory = FSDirectory.Open(IndexPath);
-                using var analyzer = new StandardAnalyzer(LuceneVersion);
-                var config = new IndexWriterConfig(LuceneVersion, analyzer);
+                // ===== DOCUMENT PREPARATION TIMING =====
+                var prepStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                
+                // Delete existing document to prevent duplicates
+                DeleteExistingDocument(filePath);
 
-                using var writer = new IndexWriter(directory, config);
+                // Create STORAGE-OPTIMIZED Lucene document
+                var doc = new Document();
+                var fileName = Path.GetFileName(filePath);
+                var fileExtension = Path.GetExtension(filePath).ToLower().TrimStart('.');
+                var indexedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                var modifiedDate = File.GetLastWriteTime(filePath).ToString("yyyy-MM-dd HH:mm:ss");
 
-                // Create high-resolution document analysis
-                //var highResDoc = CreateHighResolutionDocument(filePath, content);
+                // ===== ESSENTIAL FIELDS =====
+                doc.Add(new TextField("filename", fileName, Field.Store.YES));
+                doc.Add(new StringField("filepath", filePath, Field.Store.YES));
+                doc.Add(new StringField("filetype", fileExtension, Field.Store.YES));
+                doc.Add(new StringField("indexed_date", indexedDate, Field.Store.YES));
+                doc.Add(new StringField("file_modified_date", modifiedDate, Field.Store.YES));
 
-                // Index main document with semantic embeddings
-                //IndexMainDocument(writer, highResDoc);
+                // Store AND index FULL content
+                doc.Add(new TextField("content", content, Field.Store.YES));
+                
+                prepStopwatch.Stop();
+                Console.WriteLine($"📋 Document preparation completed in: {prepStopwatch.ElapsedMilliseconds:N0} ms");
 
-                // Index content blocks for better semantic search
-                //IndexContentBlocks(writer, highResDoc);
 
-                writer.Commit();
-                Console.WriteLine($"High-resolution indexing completed for: {Path.GetFileName(filePath)}");
+                // ===== WORD-BY-WORD INDEXING SECTION =====
+                var wordStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                Console.WriteLine($"🔤 Starting word-by-word indexing for: {fileName}");
+                var words = ExtractWords(content);
+                var wordPositionMap = new Dictionary<string, List<int>>();
+                
+                // Build word position mapping
+                for (int i = 0; i < words.Count; i++)
+                {
+                    var word = words[i].ToLower().Trim();
+                    if (!string.IsNullOrEmpty(word) && word.Length > 1) // Skip single characters and empty
+                    {
+                        if (!wordPositionMap.ContainsKey(word))
+                            wordPositionMap[word] = new List<int>();
+                        wordPositionMap[word].Add(i);
+                    }
+                }
+
+                // Create word documents
+                foreach (var wordEntry in wordPositionMap)
+                {
+                    var word = wordEntry.Key;
+                    var positions = wordEntry.Value;
+                    
+                    var wordDoc = new Document();
+                    wordDoc.Add(new StringField("doc_type", "word", Field.Store.YES));
+                    wordDoc.Add(new StringField("parent_file", filePath, Field.Store.YES));
+                    wordDoc.Add(new StringField("parent_filename", fileName, Field.Store.YES));
+                    wordDoc.Add(new TextField("word", word, Field.Store.YES));
+                    wordDoc.Add(new TextField("word_normalized", word.ToLower(), Field.Store.YES));
+                    wordDoc.Add(new Int32Field("frequency", positions.Count, Field.Store.YES));
+                    wordDoc.Add(new TextField("positions", string.Join(",", positions), Field.Store.YES));
+                    wordDoc.Add(new StringField("filetype", fileExtension, Field.Store.YES));
+                    
+                    // Add context for first occurrence
+                    if (positions.Count > 0)
+                    {
+                        var firstPos = positions[0];
+                        var contextStart = Math.Max(0, firstPos - 5);
+                        var contextEnd = Math.Min(words.Count, firstPos + 6);
+                        var context = string.Join(" ", words.Skip(contextStart).Take(contextEnd - contextStart));
+                        wordDoc.Add(new TextField("context", context, Field.Store.YES));
+                        wordDoc.Add(new Int32Field("first_position", firstPos, Field.Store.YES));
+                    }
+                    
+                    indexWriter.AddDocument(wordDoc);
+                }
+                
+                wordStopwatch.Stop();
+                Console.WriteLine($"✅ Word-by-word indexing completed: {wordPositionMap.Count} unique words indexed in {wordStopwatch.ElapsedMilliseconds:N0} ms ({wordStopwatch.Elapsed.TotalSeconds:F2}s)");
+
+                // ===== SENTENCE-BY-SENTENCE INDEXING SECTION =====
+                var sentenceStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                Console.WriteLine($"📝 Starting sentence-by-sentence indexing for: {fileName}");
+                var sentences = SplitIntoSentences(content);
+                foreach (var (sentence, index) in sentences.Select((s, i) => (s, i)))
+                {
+                    if (!string.IsNullOrWhiteSpace(sentence))
+                    {
+                        var sentenceDoc = new Document();
+                        sentenceDoc.Add(new StringField("doc_type", "sentence", Field.Store.YES));
+                        sentenceDoc.Add(new StringField("parent_file", filePath, Field.Store.YES));
+                        sentenceDoc.Add(new StringField("parent_filename", fileName, Field.Store.YES));
+                        sentenceDoc.Add(new TextField("sentence_content", sentence.Trim(), Field.Store.YES));
+                        sentenceDoc.Add(new Int32Field("sentence_index", index, Field.Store.YES));
+                        sentenceDoc.Add(new StringField("filetype", fileExtension, Field.Store.YES));
+
+                        if (index > 0)
+                            sentenceDoc.Add(new TextField("previous_sentence", sentences[index - 1].Trim(), Field.Store.YES));
+                        if (index < sentences.Count - 1)
+                            sentenceDoc.Add(new TextField("next_sentence", sentences[index + 1].Trim(), Field.Store.YES));
+
+                        indexWriter.AddDocument(sentenceDoc);
+                    }
+                }
+                
+                sentenceStopwatch.Stop();
+                Console.WriteLine($"✅ Sentence-by-sentence indexing completed: {sentences.Count} sentences indexed in {sentenceStopwatch.ElapsedMilliseconds:N0} ms ({sentenceStopwatch.Elapsed.TotalSeconds:F2}s)");
+
+                // ===== FINAL COMMIT TIMING =====
+                var commitStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                
+                // File size info
+                var fileInfo = new FileInfo(filePath);
+                doc.Add(new Int64Field("file_size", fileInfo.Length, Field.Store.YES));
+
+                // Add document to index
+                indexWriter.AddDocument(doc);
+                indexWriter.Commit();
+                
+                commitStopwatch.Stop();
+                Console.WriteLine($"💾 Index commit completed in: {commitStopwatch.ElapsedMilliseconds:N0} ms");
+                
+                // ===== TOTAL TIMING SUMMARY =====
+                totalStopwatch.Stop();
+                var totalSeconds = totalStopwatch.Elapsed.TotalSeconds;
+                var fileSizeMB = fileInfo.Length / (1024.0 * 1024.0);
+                
+                Console.WriteLine($"🎯 TOTAL INDEXING TIME for {fileName}: {totalStopwatch.ElapsedMilliseconds:N0} ms ({totalSeconds:F2}s)");
+                Console.WriteLine($"📊 File size: {fileSizeMB:F2} MB | Processing speed: {(fileSizeMB/totalSeconds):F2} MB/s");
+                Console.WriteLine($"📈 Performance: {(words?.Count ?? 0):N0} words & {(sentences?.Count ?? 0):N0} sentences processed");
+                Console.WriteLine("=".PadRight(80, '='));
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error indexing file {filePath}: {ex.Message}");
+                totalStopwatch.Stop();
+                Console.WriteLine($"❌ Error indexing file {filePath} after {totalStopwatch.ElapsedMilliseconds:N0} ms: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Extract words from text for word-by-word indexing
+        /// </summary>
+        private List<string> ExtractWords(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return new List<string>();
+
+            // Split text into words using regex to handle punctuation properly
+            var words = new List<string>();
+            var wordPattern = @"\b[\w']+\b"; // Matches word boundaries including apostrophes
+            var matches = System.Text.RegularExpressions.Regex.Matches(text, wordPattern);
+            
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                var word = match.Value.Trim();
+                if (!string.IsNullOrWhiteSpace(word) && word.Length > 1)
+                {
+                    words.Add(word);
+                }
+            }
+            
+            return words;
+        }
+
+        /// <summary>
+        /// Split text into sentences for precise indexing
+        /// </summary>
+        private List<string> SplitIntoSentences(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return new List<string>();
+                
+            // Split on sentence endings, but keep the delimiter
+            var sentences = new List<string>();
+            var currentSentence = new StringBuilder();
+            
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                currentSentence.Append(c);
+                
+                // Check for sentence ending
+                if (c == '.' || c == '!' || c == '?')
+                {
+                    // Look ahead to avoid splitting on abbreviations
+                    if (i < text.Length - 1)
+                    {
+                        char next = text[i + 1];
+                        // If next char is space/newline and then uppercase, it's likely sentence end
+                        if (char.IsWhiteSpace(next))
+                        {
+                            if (i + 2 < text.Length && char.IsUpper(text[i + 2]))
+                            {
+                                sentences.Add(currentSentence.ToString().Trim());
+                                currentSentence.Clear();
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // End of text
+                        sentences.Add(currentSentence.ToString().Trim());
+                        currentSentence.Clear();
+                    }
+                }
+                // Split on paragraph breaks as well
+                else if (c == '\n' && i < text.Length - 1 && text[i + 1] == '\n')
+                {
+                    if (currentSentence.Length > 10) // Only if we have substantial content
+                    {
+                        sentences.Add(currentSentence.ToString().Trim());
+                        currentSentence.Clear();
+                    }
+                }
+            }
+            
+            // Add remaining content
+            if (currentSentence.Length > 0)
+            {
+                sentences.Add(currentSentence.ToString().Trim());
+            }
+            
+            // Filter out very short sentences and clean up
+            return sentences
+                .Where(s => !string.IsNullOrWhiteSpace(s) && s.Length > 10)
+                .Select(s => s.Trim())
+                .ToList();
         }
     }
 }

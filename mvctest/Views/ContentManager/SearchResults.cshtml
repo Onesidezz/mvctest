@@ -728,6 +728,18 @@
                                         <span class="stat-label">Resolution Mode</span>
                                         <span class="stat-value" id="resolutionMode"></span>
                                     </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">Total Time</span>
+                                        <span class="stat-value" id="totalTime"></span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">Search Time</span>
+                                        <span class="stat-value" id="searchTime"></span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">AI Generation Time</span>
+                                        <span class="stat-value" id="aiTime"></span>
+                                    </div>
                                 </div>
                             </div>
                             <div class="deep-search-answer"></div>
@@ -942,6 +954,10 @@
     </div>
 
     <script>
+        // QueryId from server (legacy - no longer used)
+        var queryId = '@TempData["QueryId"]';
+        console.log('QueryId (legacy):', queryId);
+        
         $(document).ready(function() {
             // Deep Search functionality
             $('#deepSearchBtn').on('click', function() {
@@ -989,7 +1005,9 @@
                 // Update typing message with file count
                 setTimeout(function() {
                     $answer.html('');
-                    typeWriter(`🔍 Analyzing ${filePaths.length} documents from your search results...`, $answer, 40);
+                    var searchMessage = `🔍 Analyzing ${filePaths.length} documents from your search results...`;
+                    typeWriter(searchMessage, $answer, 40);
+                    console.log('🔥 Using intelligent semantic search with AI analysis');
                 }, 1500);
 
                 $.ajax({
@@ -998,7 +1016,8 @@
                     contentType: 'application/json',
                     data: JSON.stringify({ 
                         query: query,
-                        filePaths: filePaths 
+                        filePaths: filePaths,
+                        queryId: queryId && queryId !== '' ? queryId : null
                     }),
                     global: false,
                     success: function(data) {
@@ -1022,6 +1041,21 @@
                             $('#queryType').text(data.searchMetadata.queryType || 'General Query');
                             $('#resultsFound').text(data.searchMetadata.resultsFound || 0);
                             $('#resolutionMode').text(data.searchMetadata.highResolutionEnabled ? 'High-Resolution' : 'Standard');
+                            
+                            // Display timing information
+                            if (data.searchMetadata.totalTimeMinutes !== undefined) {
+                                $('#totalTime').text(data.searchMetadata.totalTimeMinutes.toFixed(2) + ' min (' + data.searchMetadata.totalTimeSeconds.toFixed(2) + 's)');
+                            } else {
+                                $('#totalTime').text('N/A');
+                            }
+                            
+                            if (data.searchMetadata.performanceBreakdown) {
+                                $('#searchTime').text(data.searchMetadata.performanceBreakdown.searchTimeSeconds.toFixed(2) + 's');
+                                $('#aiTime').text(data.searchMetadata.performanceBreakdown.aiGenerationTimeSeconds.toFixed(2) + 's');
+                            } else {
+                                $('#searchTime').text('N/A');
+                                $('#aiTime').text('N/A');
+                            }
                         }
 
                         // Clean and validate the answer text
@@ -1037,9 +1071,9 @@
                         
                         console.log('Cleaned answer text:', answerText);
 
-                        // Display the answer - TEMPORARILY DISABLE TYPING EFFECT FOR DEBUGGING
+                        // Display the answer with proper HTML rendering for highlighting
                         $answer.html('');
-                        $answer.text(answerText); // Show immediately without typing effect
+                        $answer.html(answerText); // Use .html() to render <strong> tags for highlighting
                         $btn.prop('disabled', false);
                         $btn.html('<i class="fas fa-brain"></i> Ask AI');
                         
@@ -1126,13 +1160,23 @@
             }
             text = String(text);
             
+            // If text contains HTML tags (like <strong>), use .html() instead of .text()
+            if (text.includes('<strong>') || text.includes('</strong>')) {
+                // For HTML content, display immediately without typing effect to preserve formatting
+                $element.html(text);
+                if (callback) {
+                    callback();
+                }
+                return;
+            }
+            
             let i = 0;
             let displayText = '';
             
             function type() {
                 if (i < text.length) {
                     displayText += text.charAt(i);
-                    $element.text(displayText); // Use .text() instead of .append() for safety
+                    $element.text(displayText); // Use .text() for plain text
                     i++;
                     setTimeout(type, speed);
                 } else if (callback) {

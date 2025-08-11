@@ -1,5 +1,6 @@
 ﻿using Hangfire;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using mvctest.Context;
 using mvctest.Models;
 using mvctest.Services;
@@ -9,6 +10,10 @@ var builder = WebApplication.CreateBuilder(args);
 // ===== 1. Configure Database & Infrastructure Services =====
 builder.Services.AddDbContext<ContentManagerContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Add distributed cache for general caching (in-memory for now, Redis for production)
+builder.Services.AddMemoryCache();
+builder.Services.AddDistributedMemoryCache();
 
 // ===== 2. Register Configuration (AppSettings) =====
 builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSettings"));
@@ -23,6 +28,8 @@ builder.Services.AddSingleton<ILuceneInterface, LuceneServices>();
 
 // Register the high-resolution text analyzer
 builder.Services.AddSingleton<HighResolutionTextAnalyzer>();
+
+// Two-phase search removed as it was not working properly
 
 
 // ===== 4. Register HTTP & Session Services =====

@@ -10,9 +10,11 @@ namespace mvctest.Controllers
     public class ProcessingController : ControllerBase
     {
         private readonly ILuceneInterface _luceneInterface;
+        
         public ProcessingController(ILuceneInterface luceneInterface)
         {
             _luceneInterface = luceneInterface;
+            Console.WriteLine("🚀 ProcessingController initialized with Lucene for fast indexing");
         }
         [HttpPost("process-directory")]
         public async Task<IActionResult> ProcessDirectory([FromBody] ProcessDirectoryRequest request)
@@ -40,6 +42,7 @@ namespace mvctest.Controllers
                 return StatusCode(500, new { message = $"Error processing directory: {ex.Message}" });
             }
         }
+
 
     }
 }

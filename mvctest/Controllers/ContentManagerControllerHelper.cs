@@ -294,37 +294,167 @@ namespace mvctest.Controllers
                 return "";
             }
         }
+
+        /// <summary>
+        /// SMART Early Termination: Stop processing once we get a high-quality answer
+        /// Saves unnecessary API calls and improves performance
+        /// </summary>
+        private async Task<string> GenerateAnswerWithEarlyTermination(string query, List<(string filePath, float relevanceScore, string relevantContent)> detailedResults)
+        {
+            var processedFiles = 0;
+            var maxFiles = Math.Min(5, detailedResults.Count); // Process max 5 files
+            
+            Console.WriteLine($"🎯 Early Termination Logic: Will process max {maxFiles} files, stopping at first good answer");
+
+            foreach (var (filePath, score, content) in detailedResults.Take(maxFiles))
+            {
+                processedFiles++;
+                
+                try
+                {
+                    Console.WriteLine($"📄 Processing file {processedFiles}/{maxFiles}: {System.IO.Path.GetFileName(filePath)} (score: {score:F3})");
+
+                    var fileAnswer = await GetGenerativeAnswers(query, filePath, content);
+
+                    // 🚀 EARLY TERMINATION CONDITIONS
+                    if (!string.IsNullOrEmpty(fileAnswer) && !IsNegativeAnswer(fileAnswer))
+                    {
+                        var answerQuality = EvaluateAnswerQuality(fileAnswer, query);
+                        Console.WriteLine($"📊 Answer quality: {answerQuality:F2} (threshold: 0.7)");
+                        
+                        // ✅ TERMINATE EARLY if we get a high-quality answer
+                        if (answerQuality >= 0.7f || score >= 0.8f)
+                        {
+                            Console.WriteLine($"🏆 HIGH QUALITY ANSWER FOUND! Terminating early after {processedFiles} files");
+                            Console.WriteLine($"⚡ Saved {maxFiles - processedFiles} unnecessary API calls!");
+                            return $"From {System.IO.Path.GetFileName(filePath)}: {fileAnswer}";
+                        }
+                        
+                        // 🎯 For exact identifier searches, ANY positive answer terminates
+                        if (HasExactIdentifier(query) && score >= 0.9f)
+                        {
+                            Console.WriteLine($"🔍 EXACT MATCH with positive answer! Terminating early");
+                            return $"From {System.IO.Path.GetFileName(filePath)}: {fileAnswer}";
+                        }
+                        
+                        // Store as backup answer but continue searching
+                        if (processedFiles == 1) // First valid answer becomes fallback
+                        {
+                            Console.WriteLine($"💾 Stored first valid answer as backup");
+                            var firstValidAnswer = $"From {System.IO.Path.GetFileName(filePath)}: {fileAnswer}";
+                            
+                            // If this is a good relevance match, use it after trying one more file
+                            if (score >= 0.6f && processedFiles < maxFiles)
+                            {
+                                Console.WriteLine($"🔄 Good answer found, checking one more file for comparison");
+                                continue;
+                            }
+                            else
+                            {
+                                Console.WriteLine($"✅ Using first valid answer - relevance acceptable");
+                                return firstValidAnswer;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"❌ Negative/unhelpful answer from {System.IO.Path.GetFileName(filePath)} - continuing");
+                    }
+                    
+                    // 🛑 SMART BREAK: If first 2 files give negative results and scores are low, stop
+                    if (processedFiles >= 2 && score < 0.3f)
+                    {
+                        Console.WriteLine($"🛑 Low confidence after 2 files - early termination to save resources");
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Error processing {System.IO.Path.GetFileName(filePath)}: {ex.Message}");
+                }
+            }
+
+            Console.WriteLine($"⚠️ No high-quality answer found after processing {processedFiles} files");
+            
+            // Fallback: Use content from best file
+            var bestFile = detailedResults.First();
+            var snippet = bestFile.relevantContent.Length > 500 
+                ? bestFile.relevantContent.Substring(0, 500) + "..." 
+                : bestFile.relevantContent;
+            
+            return $"Based on content from {System.IO.Path.GetFileName(bestFile.filePath)}: {snippet}";
+        }
+
+        /// <summary>
+        /// Evaluate answer quality to determine if we should terminate early
+        /// </summary>
+        private float EvaluateAnswerQuality(string answer, string query)
+        {
+            if (string.IsNullOrWhiteSpace(answer))
+                return 0f;
+
+            float score = 0f;
+            var answerLower = answer.ToLower();
+            var queryWords = query.ToLower().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            // ✅ High quality indicators
+            if (answer.Length > 50 && answer.Length < 1000) score += 0.3f; // Good length
+            if (queryWords.Any(word => answerLower.Contains(word))) score += 0.4f; // Contains query terms
+            if (answer.Contains(":")|| answer.Contains("•") || answer.Contains("-")) score += 0.2f; // Structured
+            if (!answerLower.Contains("i cannot") && !answerLower.Contains("not available")) score += 0.3f; // Positive
+            
+            // ✅ Extra points for specific content
+            if (answerLower.Contains("guid") || answerLower.Contains("character") || answerLower.Contains("name")) score += 0.2f;
+            
+            // ❌ Quality penalties
+            if (answer.Length < 20) score -= 0.3f; // Too short
+            if (answer.Length > 1500) score -= 0.2f; // Too verbose
+            if (answerLower.Contains("based on the content") && answer.Length < 100) score -= 0.4f; // Generic response
+
+            return Math.Max(0f, Math.Min(1f, score));
+        }
+
+        /// <summary>
+        /// Check if query contains exact identifiers (GUIDs, codes, etc.)
+        /// </summary>
+        private bool HasExactIdentifier(string query)
+        {
+            var patterns = new[]
+            {
+                @"[a-fA-F0-9]{8,}(?:-[a-fA-F0-9]{4,})*", // GUIDs
+                @"\b[A-Z0-9]{6,}\b", // Codes
+                @"\b\d{8,}\b" // Long numbers
+            };
+
+            return patterns.Any(pattern => System.Text.RegularExpressions.Regex.IsMatch(query, pattern));
+        }
+
         private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformSemanticPreFiltering(string query, List<string> filePaths)
         {
             try
             {
-                Console.WriteLine($"Starting intelligent pre-filtering for query: '{query}' across {filePaths.Count} files");
+                Console.WriteLine($"🚀 Starting INTELLIGENT pre-filtering for query: '{query}' across {filePaths.Count} files");
 
-                // Analyze query type
-                var queryAnalysis = AnalyzeQueryType(query);
-                Console.WriteLine($"Query Analysis - Type: {queryAnalysis.queryType}, Confidence: {queryAnalysis.confidence:F2}");
-
-                // Decide search strategy based on query analysis
-                if (queryAnalysis.queryType == QueryType.ExactSearch && queryAnalysis.confidence > 0.7)
+                // Use the new IntelligentSearchOrchestrator for better query analysis and ranking
+                var serviceProvider = HttpContext.RequestServices;
+                var logger = serviceProvider.GetRequiredService<ILogger<IntelligentSearchOrchestrator>>();
+                var orchestrator = new IntelligentSearchOrchestrator(_luceneInterface, logger);
+                
+                // Perform smart search with proper exact match prioritization
+                var results = await orchestrator.SmartSearchAsync(query, filePaths);
+                
+                Console.WriteLine($"✅ Intelligent search completed: {results.Count} results found");
+                foreach (var result in results.Take(5))
                 {
-                    Console.WriteLine("🎯 Using keyword-based search for exact/identifier query");
-                    return await PerformKeywordPreFiltering(query, filePaths);
+                    Console.WriteLine($"  📄 {Path.GetFileName(result.filePath)}: Score={result.similarity:F3}, Type={result.documentType}");
                 }
-                else if (queryAnalysis.queryType == QueryType.Hybrid || queryAnalysis.confidence < 0.7)
-                {
-                    Console.WriteLine("🔄 Using HYBRID search (semantic + keyword) for best results");
-                    return await PerformHybridSearch(query, filePaths);
-                }
-                else
-                {
-                    Console.WriteLine("🧠 Using semantic search for natural language query");
-                    return await PerformPureSemanticSearch(query, filePaths);
-                }
+                
+                return results;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in intelligent pre-filtering: {ex.Message}");
-                // Fallback to hybrid search on error
+                Console.WriteLine($"❌ Error in intelligent pre-filtering: {ex.Message}");
+                // Fallback to the old hybrid search on error
                 return await PerformHybridSearch(query, filePaths);
             }
         }
@@ -430,47 +560,50 @@ namespace mvctest.Controllers
 
             try
             {
-                var modelPath = System.IO.Path.Combine("C:\\Users\\ukhan2\\Desktop\\ONNXModel", "model.onnx");
-                if (!System.IO.File.Exists(modelPath))
+                Console.WriteLine($"🧠 Using stored ONNX embeddings for semantic search: '{query}'");
+                
+                // Use the existing SemanticSearch method that leverages stored embeddings
+                var luceneResults = _luceneInterface.SemanticSearch(query, filePaths, 50);
+                
+                if (luceneResults?.Any() == true)
                 {
-                    Console.WriteLine("ONNX model not found for semantic search");
-                    return semanticMatches;
-                }
-
-                using var embeddingService = new TextEmbeddingService(modelPath);
-                var queryEmbedding = embeddingService?.GetEmbedding(query);
-                if (queryEmbedding == null)
-                {
-                    Console.WriteLine("Failed to generate query embedding");
-                    return semanticMatches;
-                }
-
-                // Process files in batches
-                var batchSize = 5;
-                var batches = filePaths.Select((path, index) => new { path, index })
-                                      .GroupBy(x => x.index / batchSize)
-                                      .Select(g => g.Select(x => x.path).ToList())
-                                      .ToList();
-
-                foreach (var batch in batches)
-                {
-                    var batchTasks = batch.Select(async filePath =>
+                    Console.WriteLine($"✅ Found {luceneResults.Count} results from stored embeddings");
+                    
+                    // Convert Lucene results to the expected format
+                    foreach (var result in luceneResults)
                     {
-                        return await ProcessFileForSemanticMatch(filePath, query, queryEmbedding, embeddingService);
-                    });
-
-                    var batchResults = await Task.WhenAll(batchTasks);
-                    semanticMatches.AddRange(batchResults.Where(result => result.similarity > 0.1f)); // Lower threshold
+                        var relevantChunks = new List<string>();
+                        if (!string.IsNullOrEmpty(result.Content))
+                        {
+                            // Extract relevant snippets from the content
+                            var snippets = _luceneInterface.GetAllContentSnippets(result.Content, query, 300);
+                            relevantChunks = snippets.Take(3).ToList();
+                        }
+                        
+                        semanticMatches.Add((
+                            result.FilePath ?? result.FileName ?? "",
+                            result.Score, // This is the similarity score from cosine similarity
+                            relevantChunks,
+                            "semantic_match"
+                        ));
+                        
+                        Console.WriteLine($"  📄 {Path.GetFileName(result.FilePath ?? result.FileName)}: Similarity={result.Score:F3}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("⚠️ No results found with stored ONNX embeddings");
                 }
 
                 return semanticMatches.OrderByDescending(m => m.similarity).ToList();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in semantic search: {ex.Message}");
+                Console.WriteLine($"❌ Error in ONNX-based semantic search: {ex.Message}");
                 return semanticMatches;
             }
         }
+
         private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformKeywordPreFiltering(string query, List<string> filePaths)
         {
             var keywordMatches = new List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>();
@@ -855,354 +988,6 @@ namespace mvctest.Controllers
             public float SemanticScore { get; set; }
             public List<string> RelevantChunks { get; set; } = new List<string>();
             public string DocumentType { get; set; }
-        }
-        //private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformSemanticPreFiltering(string query, List<string> filePaths)
-        //{
-        //    var semanticMatches = new List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>();
-
-        //    try
-        //    {
-        //        Console.WriteLine($"Starting semantic pre-filtering for query: '{query}' across {filePaths.Count} files");
-
-        //        // CRITICAL FIX: Detect exact search patterns (GUIDs, IDs, specific codes)
-        //        if (IsExactSearchQuery(query))
-        //        {
-        //            Console.WriteLine("🎯 Detected exact search query - using keyword-based search for better precision");
-        //            return await PerformKeywordPreFiltering(query, filePaths);
-        //        }
-
-        //        var modelPath = System.IO.Path.Combine("C:\\Users\\ukhan2\\Desktop\\ONNXModel", "model.onnx");
-        //        if (!System.IO.File.Exists(modelPath))
-        //        {
-        //            Console.WriteLine("ONNX model not found, falling back to keyword-based filtering");
-        //            return await PerformKeywordPreFiltering(query, filePaths);
-        //        }
-
-        //        using var embeddingService = new TextEmbeddingService(modelPath);
-        //        var queryEmbedding = embeddingService?.GetEmbedding(query);
-        //        if (queryEmbedding == null)
-        //        {
-        //            Console.WriteLine("Failed to generate query embedding, falling back to keyword filtering");
-        //            return await PerformKeywordPreFiltering(query, filePaths);
-        //        }
-
-        //        // Debug: Check if query embedding is valid
-        //        var queryEmbeddingSum = queryEmbedding.Sum();
-        //        Console.WriteLine($"🔍 Query: '{query}' | Embedding sum: {queryEmbeddingSum:F3} | Length: {queryEmbedding.Length}");
-
-        //        // Process files in batches for better performance
-        //        var batchSize = 5;
-        //        var batches = filePaths.Select((path, index) => new { path, index })
-        //                              .GroupBy(x => x.index / batchSize)
-        //                              .Select(g => g.Select(x => x.path).ToList())
-        //                              .ToList();
-
-        //        foreach (var batch in batches)
-        //        {
-        //            Console.WriteLine($"Processing batch of {batch.Count} files");
-
-        //            var batchTasks = batch.Select(async filePath =>
-        //            {
-        //                return await ProcessFileForSemanticMatch(filePath, query, queryEmbedding, embeddingService);
-        //            });
-
-        //            var batchResults = await Task.WhenAll(batchTasks);
-        //            semanticMatches.AddRange(batchResults.Where(result => result.similarity > 0));
-        //        }
-
-        //        // Sort by similarity and return top results
-        //        Console.WriteLine($"Before filtering: {semanticMatches.Count} matches found");
-        //        foreach (var match in semanticMatches.Take(5))
-        //        {
-        //            Console.WriteLine($"File: {System.IO.Path.GetFileName(match.filePath)}, Similarity: {match.similarity:F4}");
-        //        }
-
-        //        semanticMatches = semanticMatches.OrderByDescending(m => m.similarity)
-        //                                        .Where(m => m.similarity > 0.03f) // Lowered threshold for exact name searches
-        //                                        .ToList();
-
-        //        Console.WriteLine($"Semantic pre-filtering completed: {semanticMatches.Count} relevant files found");
-        //        return semanticMatches;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Console.WriteLine($"Error in semantic pre-filtering: {ex.Message}");
-        //        return await PerformKeywordPreFiltering(query, filePaths);
-        //    }
-        //}
-
-        private async Task<(string filePath, float similarity, List<string> relevantChunks, string documentType)> ProcessFileForSemanticMatch(
-            string filePath, string query, float[] queryEmbedding, TextEmbeddingService embeddingService)
-        {
-            try
-            {
-                if (!System.IO.File.Exists(filePath))
-                {
-                    return (filePath, 0f, new List<string>(), "not_found");
-                }
-
-                Console.WriteLine($"  Processing {System.IO.Path.GetFileName(filePath)} for semantic matching");
-
-                var content = Services.FileTextExtractor.ExtractTextFromFile(filePath);
-                if (string.IsNullOrEmpty(content))
-                {
-                    return (filePath, 0f, new List<string>(), "no_content");
-                }
-
-                // Quick semantic check using document summary (first 1000 chars)
-                var summary = content.Length > 100000 ? content.Substring(0, 100000) : content;
-                var summaryEmbedding = embeddingService?.GetEmbedding(summary);
-
-                if (summaryEmbedding == null)
-                {
-                    return (filePath, 0f, new List<string>(), "embedding_failed");
-                }
-
-                // Debug: Check embedding diversity
-                var embeddingSum = summaryEmbedding.Sum();
-                var embeddingVariance = summaryEmbedding.Select(x => (x - embeddingSum / summaryEmbedding.Length)).Select(x => x * x).Average();
-                Console.WriteLine($"    🧠 {System.IO.Path.GetFileName(filePath)}: embSum={embeddingSum:F3}, variance={embeddingVariance:F6}");
-
-                var docSimilarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, summaryEmbedding);
-
-                // Content-aware similarity boosting for specific terms
-                float contentBoost = CalculateContentBoost(query, content);
-                float boostedSimilarity = Math.Min(1.0f, docSimilarity + contentBoost);
-
-                // Debug logging to understand the over-boosting issue
-                Console.WriteLine($"    📊 {System.IO.Path.GetFileName(filePath)}: docSim={docSimilarity:F3}, boost=+{contentBoost:F3}, final={boostedSimilarity:F3}");
-
-                // If document summary shows promise, check content blocks
-                var relevantChunks = new List<string>();
-                float maxSimilarity = boostedSimilarity;
-
-                if (docSimilarity > 0.1f) // Only check blocks if document shows some relevance
-                {
-                    var chunks = SplitContentIntoChunks(content, 500); // Smaller chunks for pre-filtering
-                    foreach (var chunk in chunks.Take(5)) // Limit to first 5 chunks for speed
-                    {
-                        if (string.IsNullOrWhiteSpace(chunk)) continue;
-
-                        var chunkEmbedding = embeddingService?.GetEmbedding(chunk);
-                        if (chunkEmbedding != null)
-                        {
-                            var chunkSimilarity = TextEmbeddingService.CosineSimilarity(queryEmbedding, chunkEmbedding);
-                            var chunkBoost = CalculateContentBoost(query, chunk);
-                            var boostedChunkSimilarity = Math.Min(1.0f, chunkSimilarity + chunkBoost);
-
-                            if (boostedChunkSimilarity > maxSimilarity)
-                            {
-                                maxSimilarity = boostedChunkSimilarity;
-                            }
-
-                            if (boostedChunkSimilarity > 0.2f)
-                            {
-                                relevantChunks.Add(chunk);
-                            }
-                        }
-                    }
-                }
-
-                if (maxSimilarity > 0.15f)
-                {
-                    var boostInfo = contentBoost > 0 ? $" (boosted +{contentBoost:F3})" : "";
-                    Console.WriteLine($"    ✓ {System.IO.Path.GetFileName(filePath)} - similarity: {maxSimilarity:F3}{boostInfo}");
-                }
-
-                return (filePath, maxSimilarity, relevantChunks, "semantic_match");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"    ✗ Error processing {System.IO.Path.GetFileName(filePath)}: {ex.Message}");
-                return (filePath, 0f, new List<string>(), "error");
-            }
-        }
-
-        private float CalculateContentBoost(string query, string content)
-        {
-            if (string.IsNullOrEmpty(query) || string.IsNullOrEmpty(content))
-                return 0f;
-
-            var queryLower = query.ToLower();
-            var contentLower = content.ToLower();
-            float boost = 0f;
-
-            // Extract potential character names, IDs, or specific terms from query
-            var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (var word in queryWords)
-            {
-                var cleanWord = word.Trim('.', ',', ':', ';', '!', '?', '"', '\'', '(', ')');
-
-                // Boost for exact matches of specific terms
-                if (cleanWord.Length > 3 && contentLower.Contains(cleanWord.ToLower()))
-                {
-                    // Higher boost for character names/IDs (contains hyphens and numbers)
-                    if (cleanWord.Contains('-') && cleanWord.Any(char.IsDigit))
-                    {
-                        boost += 0.08f; // Reduced: Strong boost for character IDs
-                    }
-                    // Boost for capitalized names
-                    else if (char.IsUpper(cleanWord[0]) && cleanWord.Length > 4)
-                    {
-                        boost += 0.05f; // Reduced: Boost for proper names
-                    }
-                    // General term match
-                    else if (cleanWord.Length > 5)
-                    {
-                        boost += 0.03f; // Reduced: Moderate boost for specific terms
-                    }
-                }
-            }
-
-            // Additional boost for role-related keywords when asking about character roles
-            if (queryLower.Contains("role") || queryLower.Contains("character") || queryLower.Contains("what is") || queryLower.Contains("document name"))
-            {
-                var roleKeywords = new[] { "merchant", "researcher", "naturalist", "gallant", "intelligent", "analytical" };
-                foreach (var keyword in roleKeywords)
-                {
-                    if (contentLower.Contains(keyword))
-                    {
-                        boost += 0.02f; // Reduced boost
-                    }
-                }
-            }
-
-            return Math.Min(0.15f, boost); // Reduced cap: prevent over-boosting
-        }
-
-        private List<string> ExtractRelevantChunksForKeywords(string content, string[] queryWords, int maxChunks)
-        {
-            var relevantChunks = new List<string>();
-            var sentences = content.Split('.', StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (var sentence in sentences)
-            {
-                var sentenceLower = sentence.ToLower();
-                var matchCount = queryWords.Count(word => sentenceLower.Contains(word));
-
-                if (matchCount > 0 && sentence.Trim().Length > 30)
-                {
-                    relevantChunks.Add(sentence.Trim());
-                    if (relevantChunks.Count >= maxChunks) break;
-                }
-            }
-
-            return relevantChunks;
-        }
-
-        private string? ExtractFilenameFromQuery(string query)
-        {
-            if (string.IsNullOrWhiteSpace(query)) return null;
-
-            // Common file extensions to look for
-            var fileExtensions = new[] { ".docx", ".doc", ".pdf", ".pptx", ".ppt", ".xlsx", ".xls", ".txt", ".rtf" };
-
-            // Split query into words and look for filename patterns
-            var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-            foreach (var word in words)
-            {
-                var cleanWord = word.Trim('.', ',', ':', ';', '!', '?', '"', '\'', '(', ')');
-
-                // Check if word contains a file extension
-                foreach (var extension in fileExtensions)
-                {
-                    if (cleanWord.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-                    {
-                        // Additional validation: filename should have reasonable length and structure
-                        if (cleanWord.Length > extension.Length + 1 &&
-                            cleanWord.Any(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'))
-                        {
-                            Console.WriteLine($"🔍 Extracted filename from query: '{cleanWord}'");
-                            return cleanWord;
-                        }
-                    }
-                }
-            }
-
-            // Alternative approach: look for patterns like "document_001361.docx" even if split across words
-            var queryLower = query.ToLower();
-            foreach (var extension in fileExtensions)
-            {
-                var extensionPattern = extension.ToLower();
-                var extensionIndex = queryLower.IndexOf(extensionPattern);
-                if (extensionIndex > 0)
-                {
-                    // Look backwards to find the start of the filename
-                    var startIndex = extensionIndex;
-                    while (startIndex > 0 &&
-                           (char.IsLetterOrDigit(query[startIndex - 1]) ||
-                            query[startIndex - 1] == '_' ||
-                            query[startIndex - 1] == '-' ||
-                            query[startIndex - 1] == '.'))
-                    {
-                        startIndex--;
-                    }
-
-                    var potentialFilename = query.Substring(startIndex, extensionIndex - startIndex + extension.Length);
-                    if (potentialFilename.Length > extension.Length + 1)
-                    {
-                        Console.WriteLine($"🔍 Extracted filename using pattern matching: '{potentialFilename}'");
-                        return potentialFilename;
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private bool IsExactSearchQuery(string query)
-        {
-            if (string.IsNullOrEmpty(query)) return false;
-
-            var queryLower = query.ToLower();
-            
-            // Detect GUID patterns (your specific case)
-            var guidPattern = @"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b";
-            if (System.Text.RegularExpressions.Regex.IsMatch(query, guidPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-            {
-                Console.WriteLine("🔍 GUID pattern detected - using exact search");
-                return true;
-            }
-
-            // Detect other exact search patterns
-            var exactSearchIndicators = new[]
-            {
-                "guid", "id:", "uuid", "identifier",
-                "exact:", "find:", "search for:",
-                "document id", "file id", "unique id",
-                "reference number", "tracking number"
-            };
-
-            foreach (var indicator in exactSearchIndicators)
-            {
-                if (queryLower.Contains(indicator))
-                {
-                    Console.WriteLine($"🔍 Exact search indicator '{indicator}' detected");
-                    return true;
-                }
-            }
-
-            // Detect patterns like alphanumeric codes, serial numbers
-            var codePatterns = new[]
-            {
-                @"\b[A-Z0-9]{6,}\b", // Uppercase alphanumeric codes
-                @"\b\d{6,}\b",       // Long numeric sequences
-                @"\b[a-f0-9]{32}\b", // MD5-like hashes
-                @"\b[A-Z0-9]+-\d+\b" // Codes with hyphens like "ABC-123"
-            };
-
-            foreach (var pattern in codePatterns)
-            {
-                if (System.Text.RegularExpressions.Regex.IsMatch(query, pattern))
-                {
-                    Console.WriteLine($"🔍 Code pattern detected: {pattern}");
-                    return true;
-                }
-            }
-
-            return false;
         }
     }
 }

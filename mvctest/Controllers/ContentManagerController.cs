@@ -19,6 +19,12 @@ namespace mvctest.Controllers
             _luceneInterface = luceneInterface;
             _chatMLService = chatMLService;
             _appSettings = appSettings.Value;
+
+            // Initialize ML.NET Advanced Search Service
+            var indexPath = Path.Combine("C:\\Users\\ukhan2\\Desktop\\", "ml_advanced_index");
+            var modelPath = Path.Combine("C:\\Users\\ukhan2\\Desktop\\ONNXModel", "model.onnx");
+
+            Console.WriteLine("✅ ContentManagerController initialized with ML.NET Advanced Search Service");
         }
 
         public IActionResult Index(int page = 1, int pageSize = 10)
@@ -180,68 +186,42 @@ namespace mvctest.Controllers
             }
         }
 
-        public IActionResult SearchResults(string content)
+        public async Task<IActionResult> SearchResults(string content)
         {
             try
             {
-                Console.WriteLine($"SearchResults called with query: '{content}'");
-
-                // Initialize with empty list to prevent null reference
-                var searchResults = new List<Models.SearchResultModel>();
+                Console.WriteLine($"🔍 Phase 1 Search (Broad): '{content}'");
 
                 if (string.IsNullOrWhiteSpace(content))
                 {
                     TempData["InfoMessage"] = "Please enter a search query.";
-                    return View(searchResults);
+                    return View(new List<Models.SearchResultModel>());
                 }
 
-                // Check index status first
-                _luceneInterface.ShowIndexStats();
+                // Use direct Lucene search instead of two-phase approach
+                var searchResults = _luceneInterface.SearchFiles(content) ?? new List<Models.SearchResultModel>();
+                var resultSet = new { Results = searchResults, SearchTimeMs = 0, QueryId = Guid.NewGuid().ToString(), Metadata = new { CacheHit = false } };
 
-                // Call SearchFiles and handle null return
-                var luceneResults = _luceneInterface.SearchFiles(content);
-
-                Console.WriteLine($"SearchFiles returned {luceneResults?.Count ?? 0} results");
-
-                if (luceneResults != null && luceneResults.Any())
+                if (resultSet.Results.Any())
                 {
-                    searchResults = luceneResults;
-                    TempData["SuccessMessage"] = $"Found {searchResults.Count} search results.";
+                    TempData["SuccessMessage"] = $"Found {resultSet.Results.Count} results in {resultSet.SearchTimeMs}ms (cached: {resultSet.Metadata.CacheHit})";
+                    TempData["QueryId"] = resultSet.QueryId;
+
+                    Console.WriteLine($"✅ Phase 1 completed: {resultSet.Results.Count} results, {resultSet.SearchTimeMs}ms, QueryId: {resultSet.QueryId}");
                 }
                 else
                 {
-                    Console.WriteLine("No search results found - checking if index is empty");
-                    TempData["InfoMessage"] = "No search results found. The index might be empty or the query didn't match any documents. Make sure files are indexed in the API project first.";
-
-                    // Try semantic search as fallback
-                    try
-                    {
-                        Console.WriteLine("Trying semantic search as fallback...");
-                        var semanticResults = _luceneInterface.SemanticSearch(content, maxResults: 10);
-                        if (semanticResults != null && semanticResults.Any())
-                        {
-                            searchResults = semanticResults;
-                            TempData["SuccessMessage"] = $"Found {searchResults.Count} semantic search results.";
-                            Console.WriteLine($"Semantic search found {searchResults.Count} results");
-                        }
-                    }
-                    catch (Exception semanticEx)
-                    {
-                        Console.WriteLine($"Semantic search also failed: {semanticEx.Message}");
-                    }
+                    TempData["InfoMessage"] = "No search results found. The index might be empty or the query didn't match any documents.";
+                    Console.WriteLine("❌ No results found in Phase 1 search");
                 }
 
-                return View(searchResults); // Always pass a non-null list
+                return View(resultSet.Results);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"SearchResults error: {ex.Message}");
-                Console.WriteLine($"SearchResults stack trace: {ex.StackTrace}");
+                Console.WriteLine($"❌ Phase 1 Search error: {ex.Message}");
                 TempData["ErrorMessage"] = $"Search failed: {ex.Message}";
-
-                // Return empty results instead of redirecting to prevent view errors
-                var emptyResults = new List<Models.SearchResultModel>();
-                return View(emptyResults);
+                return View(new List<Models.SearchResultModel>());
             }
         }
 
@@ -302,6 +282,7 @@ namespace mvctest.Controllers
         [HttpPost]
         public async Task<IActionResult> DeepContentSearch([FromBody] DeepSearchRequest request)
         {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 if (string.IsNullOrEmpty(request.Query))
@@ -314,113 +295,114 @@ namespace mvctest.Controllers
                     return BadRequest(new { error = "File paths are required" });
                 }
 
-                Console.WriteLine($"DeepContentSearch: Optimized semantic search for query: '{request.Query}'");
-                Console.WriteLine($"Pre-filtering {request.FilePaths.Count} files using semantic search");
+                Console.WriteLine($"🚀 DeepContentSearch: Using Intelligent Search for query: '{request.Query}'");
+                Console.WriteLine($"Processing {request.FilePaths.Count} specific files");
+                Console.WriteLine($"⏱️ DeepContentSearch started at: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
 
-                var searchTypes = new List<string> { "Semantic Pre-filtering + Advanced File Analysis" };
+                var searchTypes = new List<string> { "Intelligent Search + AI Analysis" };
 
-                // Step 1: Semantic pre-filtering to identify most relevant files quickly
-                var semanticMatches = await PerformSemanticPreFiltering(request.Query, request.FilePaths);
+                // Use the intelligent search orchestrator directly
+                Console.WriteLine("🧠 Using intelligent semantic search with early termination");
 
-                if (!semanticMatches.Any())
+                var searchStartTime = stopwatch.Elapsed;
+                Console.WriteLine($"⏱️ Starting Lucene search at: {searchStartTime.TotalSeconds:F2} seconds");
+                
+                var searchResults = _luceneInterface.SearchFilesInPaths(request.Query,request.FilePaths) ?? new List<Models.SearchResultModel>();
+                
+                var searchEndTime = stopwatch.Elapsed;
+                Console.WriteLine($"⏱️ Lucene search completed at: {searchEndTime.TotalSeconds:F2} seconds (took {(searchEndTime - searchStartTime).TotalSeconds:F2} seconds)");
+
+                if (!searchResults.Any())
                 {
-                    Console.WriteLine("No semantically relevant files found");
+                    Console.WriteLine("No search results found");
                     return Json(new
                     {
-                        answer = $"I couldn't find any information related to '{request.Query}' in the provided documents using semantic analysis. The content may not be relevant to your question.",
+                        answer = $"I couldn't find any information related to '{request.Query}' in the provided documents. The content may not be relevant to your question.",
                         searchMetadata = new
                         {
                             searchTypes = searchTypes,
                             resultsFound = 0,
                             highResolutionEnabled = true,
-                            queryType = "Optimized Semantic Pre-filtering",
+                            queryType = "Lucene Search",
                             filesSearched = request.FilePaths.Count,
                             filesWithMatches = 0,
-                            averageSimilarity = 0f,
-                            topSimilarity = 0f,
+                            averageScore = 0f,
+                            topScore = 0f,
                             relevantFiles = new List<object>()
                         }
                     });
                 }
 
-                Console.WriteLine($"Semantic pre-filtering found {semanticMatches.Count} relevant files");
+                Console.WriteLine($"Search found {searchResults.Count} relevant results");
 
-                // Use normal semantic ranking
-                var topSemanticMatches = semanticMatches.Take(5).ToList();
+                // Use search results ranking
+                var topSearchResults = searchResults.Take(5).ToList();
                 var detailedResults = new List<(string filePath, float relevanceScore, string relevantContent)>();
 
-                foreach (var (filePath, similarity, chunks, docType) in topSemanticMatches)
+                foreach (var result in topSearchResults)
                 {
                     try
                     {
-                        Console.WriteLine($"Detailed analysis of {System.IO.Path.GetFileName(filePath)} (semantic similarity: {similarity:F3})");
+                        Console.WriteLine($"Detailed analysis of {System.IO.Path.GetFileName(result.FilePath)} (search score: {result.Score:F3})");
 
                         // Extract full content for detailed analysis
-                        var fullContent = Services.FileTextExtractor.ExtractTextFromFile(filePath);
+                        var fullContent = Services.FileTextExtractor.ExtractTextFromFile(result.FilePath);
                         if (!string.IsNullOrEmpty(fullContent))
                         {
-                            // Use the semantic similarity as relevance score (already calculated)
-                            detailedResults.Add((filePath, similarity, fullContent));
-                            Console.WriteLine($"✓ Added {System.IO.Path.GetFileName(filePath)} for detailed processing");
+                            // Use the search score as relevance score
+                            detailedResults.Add((result.FilePath, result.Score, fullContent));
+                            Console.WriteLine($"✓ Added {System.IO.Path.GetFileName(result.FilePath)} for detailed processing");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Error processing {filePath}: {ex.Message}");
+                        Console.WriteLine($"Error processing {result.FilePath}: {ex.Message}");
                     }
                 }
+
+                // Declare timing variables outside the if blocks
+                var aiStartTime = stopwatch.Elapsed;
+                var aiEndTime = stopwatch.Elapsed;
 
                 string enhancedAnswer;
                 if (detailedResults.Any())
                 {
-                    Console.WriteLine($"Generating AI answers from {detailedResults.Count} most relevant files");
+                    Console.WriteLine($"🚀 SMART AI Generation: Processing up to {detailedResults.Count} files with early termination");
 
-                    // Step 3: Generate AI answers from top relevant files (limit to top 3 for performance)
-                    var generativeAnswers = new List<string>();
+                    aiStartTime = stopwatch.Elapsed;
+                    Console.WriteLine($"⏱️ Starting AI generation at: {aiStartTime.TotalSeconds:F2} seconds");
 
-                    foreach (var (filePath, score, content) in detailedResults)
-                    {
-                        try
-                        {
-                            Console.WriteLine($"Generating AI answer from {System.IO.Path.GetFileName(filePath)} (relevance: {score:F3})");
-
-                            var fileAnswer = await GetGenerativeAnswers(request.Query, filePath, content);
-
-                            // Validate negative answers - skip if answer is negative/unhelpful
-                            if (!string.IsNullOrEmpty(fileAnswer) && !IsNegativeAnswer(fileAnswer))
-                            {
-                                generativeAnswers.Add($"From {System.IO.Path.GetFileName(filePath)}: {fileAnswer}");
-                                Console.WriteLine($"✓ Generated answer from {System.IO.Path.GetFileName(filePath)}");
-                            }
-                            else if (!string.IsNullOrEmpty(fileAnswer))
-                            {
-                                Console.WriteLine($"⚠️ Skipping negative/unhelpful answer from {System.IO.Path.GetFileName(filePath)}");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Error generating answer from {filePath}: {ex.Message}");
-                        }
-                    }
-
-                    // Step 4: Return the best answer
-                    if (generativeAnswers.Any())
-                    {
-                        enhancedAnswer = generativeAnswers.First();
-                    }
-                    else
-                    {
-                        // Fallback: Use most relevant content directly
-                        var bestFile = detailedResults.First();
-                        var snippet = bestFile.relevantContent.Length > 500 ? bestFile.relevantContent.Substring(0, 500) + "..." : bestFile.relevantContent;
-                        enhancedAnswer = $"Based on content from {System.IO.Path.GetFileName(bestFile.filePath)}: {snippet}";
-                    }
+                    // 🎯 SMART EARLY TERMINATION LOGIC
+                    enhancedAnswer = await GenerateAnswerWithEarlyTermination(request.Query, detailedResults);
+                    
+                    aiEndTime = stopwatch.Elapsed;
+                    Console.WriteLine($"⏱️ AI generation completed at: {aiEndTime.TotalSeconds:F2} seconds (took {(aiEndTime - aiStartTime).TotalSeconds:F2} seconds)");
                 }
                 else
                 {
                     Console.WriteLine("No files passed detailed analysis");
                     enhancedAnswer = $"I couldn't extract detailed information related to '{request.Query}' from the semantically relevant files.";
                 }
+
+                // Highlight search terms in the AI response
+                var queryWords = request.Query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var word in queryWords)
+                {
+                    var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    enhancedAnswer = regex.Replace(enhancedAnswer, $"<strong>$0</strong>");
+                }
+
+                stopwatch.Stop();
+                var totalTimeMinutes = stopwatch.Elapsed.TotalMinutes;
+                var totalTimeSeconds = stopwatch.Elapsed.TotalSeconds;
+                
+                Console.WriteLine($"⏱️ DeepContentSearch COMPLETED:");
+                Console.WriteLine($"   📊 Total Time: {totalTimeMinutes:F2} minutes ({totalTimeSeconds:F2} seconds)");
+                Console.WriteLine($"   📁 Files Processed: {request.FilePaths.Count}");
+                Console.WriteLine($"   🔍 Search Matches: {searchResults.Count}");
+                Console.WriteLine($"   🧠 AI Analysis Files: {detailedResults.Count}");
+                Console.WriteLine($"   ✅ Completed at: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
 
                 return Json(new
                 {
@@ -430,26 +412,63 @@ namespace mvctest.Controllers
                         searchTypes = searchTypes,
                         resultsFound = detailedResults.Count,
                         highResolutionEnabled = true,
-                        queryType = "Optimized Semantic Pre-filtering + AI Analysis",
+                        queryType = "Lucene Search + AI Analysis",
                         filesSearched = request.FilePaths.Count,
-                        semanticMatches = semanticMatches.Count,
+                        searchMatches = searchResults.Count,
                         filesWithDetailedAnalysis = detailedResults.Count,
-                        averageSimilarity = semanticMatches.Any() ? semanticMatches.Average(f => f.similarity) : 0f,
-                        topSimilarity = semanticMatches.Any() ? semanticMatches.Max(f => f.similarity) : 0f,
-                        relevantFiles = semanticMatches.Take(5).Select(f => new
+                        averageScore = searchResults.Any() ? searchResults.Average(r => r.Score) : 0f,
+                        topScore = searchResults.Any() ? searchResults.Max(r => r.Score) : 0f,
+                        totalTimeMinutes = totalTimeMinutes,
+                        totalTimeSeconds = totalTimeSeconds,
+                        performanceBreakdown = new
                         {
-                            fileName = System.IO.Path.GetFileName(f.filePath),
-                            relevanceScore = f.similarity,
-                            documentType = f.documentType
+                            searchTimeSeconds = searchResults.Any() ? (searchEndTime - searchStartTime).TotalSeconds : 0,
+                            aiGenerationTimeSeconds = detailedResults.Any() ? (aiEndTime - aiStartTime).TotalSeconds : 0
+                        },
+                        relevantFiles = searchResults.Take(5).Select(r => new
+                        {
+                            fileName = System.IO.Path.GetFileName(r.FilePath),
+                            relevanceScore = r.Score,
+                            documentType = "Lucene Result"
                         }).ToList()
                     }
                 });
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"DeepContentSearch error: {ex.Message}");
+                stopwatch.Stop();
+                var errorTimeMinutes = stopwatch.Elapsed.TotalMinutes;
+                var errorTimeSeconds = stopwatch.Elapsed.TotalSeconds;
+                
+                Console.WriteLine($"❌ DeepContentSearch ERROR after {errorTimeMinutes:F2} minutes ({errorTimeSeconds:F2} seconds):");
+                Console.WriteLine($"   Error: {ex.Message}");
+                Console.WriteLine($"   StackTrace: {ex.StackTrace}");
+                
                 TempData["ErrorMessage"] = $"Failed to perform optimized content search: {ex.Message}";
                 return RedirectToAction("Error", "Home", new { message = ex.Message });
+            }
+        }
+
+        private async Task<string> GenerateAIAnswer(string query, List<SearchResultModel> results)
+        {
+            try
+            {
+                if (!results.Any()) return "No relevant content found.";
+
+                var bestResult = results.First();
+                var content = bestResult.Content ?? "";
+
+                if (!string.IsNullOrEmpty(content))
+                {
+                    return await GetGenerativeAnswers(query, bestResult.FilePath ?? "", content);
+                }
+
+                return $"Found relevant content in {Path.GetFileName(bestResult.FilePath)} but couldn't extract detailed information.";
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error generating AI answer: {ex.Message}");
+                return "Unable to generate AI answer from the refined results.";
             }
         }
     }
@@ -463,5 +482,6 @@ namespace mvctest.Controllers
     {
         public string Query { get; set; } = string.Empty;
         public List<string> FilePaths { get; set; } = new List<string>();
+        public string? QueryId { get; set; }
     }
 }
