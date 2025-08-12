@@ -177,51 +177,189 @@ namespace mvctest.Controllers
         {
             try
             {
+                // Clear any large TempData that might cause HTTP 431 errors
+                TempData.Remove("EnhancedResults");
+                TempData.Remove("QueryId");
+                
+                // Keep only essential messages but clear them after use
+                var successMessage = TempData["SuccessMessage"];
+                var errorMessage = TempData["ErrorMessage"];
+                var infoMessage = TempData["InfoMessage"];
+                
+                // Clear all TempData to prevent header size issues
+                TempData.Clear();
+                
+                // Restore only essential messages
+                if (successMessage != null)
+                    TempData["SuccessMessage"] = successMessage;
+                if (errorMessage != null)
+                    TempData["ErrorMessage"] = errorMessage;
+                if (infoMessage != null)
+                    TempData["InfoMessage"] = infoMessage;
+                
                 return View();
             }
             catch (Exception ex)
             {
-                TempData["ErrorMessage"] = $"Failed to IndexSearch Because {ex.Message}";
+                TempData.Clear(); // Clear everything on error
+                TempData["ErrorMessage"] = $"Search page loading failed: {ex.Message}";
                 return RedirectToAction("Error", "Home", new { message = ex.Message });
             }
         }
 
-        public async Task<IActionResult> SearchResults(string content)
+        public async Task<IActionResult> SearchResults(string content,
+            SearchMode mode = SearchMode.Comprehensive,
+            SearchResultSort sortBy = SearchResultSort.Relevance,
+            string? fileType = null,
+            bool showWordAnalysis = false,
+            bool showSentenceContext = false,
+            int maxResults = 50)
         {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var performance = new SearchPerformanceMetrics();
+
             try
             {
-                Console.WriteLine($"🔍 Phase 1 Search (Broad): '{content}'");
+                Console.WriteLine($"🔍 Enhanced Multi-Level Search: '{content}' | Mode: {mode} | Sort: {sortBy}");
 
                 if (string.IsNullOrWhiteSpace(content))
                 {
                     TempData["InfoMessage"] = "Please enter a search query.";
-                    return View(new List<Models.SearchResultModel>());
+                    return View("SearchResults", new List<SearchResultModel>());
                 }
 
-                // Use direct Lucene search instead of two-phase approach
-                var searchResults = _luceneInterface.SearchFiles(content) ?? new List<Models.SearchResultModel>();
-                var resultSet = new { Results = searchResults, SearchTimeMs = 0, QueryId = Guid.NewGuid().ToString(), Metadata = new { CacheHit = false } };
-
-                if (resultSet.Results.Any())
+                var searchParams = new AdvancedSearchParameters
                 {
-                    TempData["SuccessMessage"] = $"Found {resultSet.Results.Count} results in {resultSet.SearchTimeMs}ms (cached: {resultSet.Metadata.CacheHit})";
-                    TempData["QueryId"] = resultSet.QueryId;
+                    Query = content,
+                    Mode = mode,
+                    SortBy = sortBy,
+                    FileType = fileType,
+                    MaxResults = maxResults,
+                    ShowWordAnalysis = showWordAnalysis,
+                    ShowSentenceContext = showSentenceContext
+                };
 
-                    Console.WriteLine($"✅ Phase 1 completed: {resultSet.Results.Count} results, {resultSet.SearchTimeMs}ms, QueryId: {resultSet.QueryId}");
+                var enhancedResults = await PerformEnhancedSearch(searchParams, performance);
+
+                enhancedResults.Performance = performance;
+                enhancedResults.UsedMode = mode;
+                enhancedResults.Query = content;
+
+                // Group results by file path to avoid duplicates, combine content matches
+                var allResults = enhancedResults.DocumentResults
+                    .Concat(enhancedResults.WordResults)
+                    .Concat(enhancedResults.SentenceResults)
+                    .ToList();
+
+                Console.WriteLine($"DEBUG: Total results before grouping: {allResults.Count}");
+                Console.WriteLine($"DEBUG: Document results: {enhancedResults.DocumentResults.Count}");
+                Console.WriteLine($"DEBUG: Word results: {enhancedResults.WordResults.Count}");
+                Console.WriteLine($"DEBUG: Sentence results: {enhancedResults.SentenceResults.Count}");
+
+                var groupedResults = allResults
+                    .Where(r => r != null && !string.IsNullOrEmpty(r.FilePath)) // Filter out null results
+                    .GroupBy(r => r.FilePath)
+                    .Select(group =>
+                    {
+                        var primaryResult = group.OrderByDescending(r => r.Score).FirstOrDefault();
+                        
+                        // Skip if primaryResult is null
+                        if (primaryResult == null)
+                        {
+                            Console.WriteLine("Warning: primaryResult is null for a group");
+                            return null;
+                        }
+
+                        // Combine all snippets from all matches of the same file and extract complete sentences
+                        var allSnippets = group
+                            .Where(r => r.Snippets != null && r.Snippets.Any())
+                            .SelectMany(r => r.Snippets)
+                            .Distinct()
+                            .Select(snippet => ExtractCompleteSentence(snippet)) // Extract complete sentences based on full stops
+                            .Where(snippet => !string.IsNullOrWhiteSpace(snippet)) // Filter out null/empty results
+                            .Take(5) // Limit to maximum 5 snippets per file
+                            .ToList();
+
+                        // Create consolidated result
+                        var consolidatedResult = new SearchResultModel
+                        {
+                            FileName = primaryResult.FileName,
+                            FilePath = primaryResult.FilePath,
+                            Content = primaryResult.Content,
+                            Score = group.Max(r => r.Score), // Use highest score
+                            date = primaryResult.date,
+                            Metadata = primaryResult.Metadata ?? new Dictionary<string, string>(),
+                            Snippets = allSnippets,
+                            EntityMatches = primaryResult.EntityMatches ?? new List<string>(),
+                            SemanticSimilarity = primaryResult.SemanticSimilarity,
+                            Confidence = primaryResult.Confidence,
+                            MLFeatures = primaryResult.MLFeatures ?? new Dictionary<string, float>()
+                        };
+
+                        // Add match type information to metadata
+                        var matchTypes = new List<string>();
+                        if (group.Any(r => r.Metadata?.GetValueOrDefault("doc_type") == "word"))
+                            matchTypes.Add("Word-level");
+                        if (group.Any(r => r.Metadata?.GetValueOrDefault("doc_type") == "sentence"))
+                            matchTypes.Add("Sentence-level");
+                        if (group.Any(r => r.Metadata?.ContainsKey("doc_type") != true || r.Metadata["doc_type"] == "document"))
+                            matchTypes.Add("Document-level");
+
+                        if (matchTypes.Any())
+                        {
+                            consolidatedResult.Metadata["SearchLevels"] = string.Join(", ", matchTypes);
+                            consolidatedResult.Metadata["TotalMatches"] = group.Count().ToString();
+                        }
+
+                        return consolidatedResult;
+                    })
+                    .Where(r => r != null) // Filter out null results
+                    .OrderByDescending(r => r.Score)
+                    .ToList();
+
+                Console.WriteLine($"DEBUG: Final grouped results count: {groupedResults.Count}");
+                for (int i = 0; i < Math.Min(3, groupedResults.Count); i++)
+                {
+                    var result = groupedResults[i];
+                    Console.WriteLine($"DEBUG: Result {i + 1}: FileName='{result.FileName}', FilePath='{result.FilePath}', Content length={result.Content?.Length ?? 0}, Snippets count={result.Snippets?.Count ?? 0}");
+                    if (result.Snippets != null && result.Snippets.Any())
+                    {
+                        Console.WriteLine($"DEBUG: First snippet: '{result.Snippets.First()}'");
+                    }
+                }
+
+                totalStopwatch.Stop();
+                performance.TotalSearchTime = totalStopwatch.Elapsed;
+
+                if (groupedResults.Any())
+                {
+                    var uniqueFileCount = groupedResults.Count;
+                    var totalMatches = enhancedResults.TotalResults;
+
+                    TempData["SuccessMessage"] = $"Found {uniqueFileCount} files ({totalMatches} matches) in {performance.TotalSearchTime.TotalMilliseconds:F0}ms";
+                    // Simplified QueryId to prevent header size issues
+                    TempData["QueryId"] = DateTime.Now.Ticks.ToString();
+
+                    Console.WriteLine($"✅ Enhanced search completed: {uniqueFileCount} unique files, {totalMatches} total matches, {performance.TotalSearchTime.TotalMilliseconds:F0}ms");
+                    Console.WriteLine($"📊 Performance breakdown: Documents={performance.DocumentMatchesFound}, Words={performance.WordMatchesFound}, Sentences={performance.SentenceMatchesFound}");
                 }
                 else
                 {
-                    TempData["InfoMessage"] = "No search results found. The index might be empty or the query didn't match any documents.";
-                    Console.WriteLine("❌ No results found in Phase 1 search");
+                    TempData["InfoMessage"] = $"No search results found for '{content}' using {mode} mode. Try a different search mode or query.";
+                    Console.WriteLine($"❌ No results found with {mode} mode");
                 }
 
-                return View(resultSet.Results);
+                // Don't store enhanced results in TempData to prevent HTTP 431 errors
+                // TempData["EnhancedResults"] = System.Text.Json.JsonSerializer.Serialize(enhancedResults);
+
+                return View("SearchResults", groupedResults);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Phase 1 Search error: {ex.Message}");
+                totalStopwatch.Stop();
+                Console.WriteLine($"❌ Enhanced search error after {totalStopwatch.ElapsedMilliseconds}ms: {ex.Message}");
                 TempData["ErrorMessage"] = $"Search failed: {ex.Message}";
-                return View(new List<Models.SearchResultModel>());
+                return View("SearchResults", new List<SearchResultModel>());
             }
         }
 
@@ -305,12 +443,34 @@ namespace mvctest.Controllers
                 Console.WriteLine("🧠 Using intelligent semantic search with early termination");
 
                 var searchStartTime = stopwatch.Elapsed;
-                Console.WriteLine($"⏱️ Starting Lucene search at: {searchStartTime.TotalSeconds:F2} seconds");
-                
-                var searchResults = _luceneInterface.SearchFilesInPaths(request.Query,request.FilePaths) ?? new List<Models.SearchResultModel>();
-                
+                Console.WriteLine($"⏱️ Starting Enhanced Multi-Level search at: {searchStartTime.TotalSeconds:F2} seconds");
+
+                // Use enhanced search with intelligent mode detection
+                var searchMode = DetectOptimalSearchMode(request.Query);
+                Console.WriteLine($"🎯 Detected optimal search mode: {searchMode}");
+
+                var searchParams = new AdvancedSearchParameters
+                {
+                    Query = request.Query,
+                    Mode = searchMode,
+                    MaxResults = 20,
+                    ShowWordAnalysis = searchMode == SearchMode.WordLevel,
+                    ShowSentenceContext = searchMode == SearchMode.SentenceLevel || searchMode == SearchMode.Hybrid
+                };
+
+                var performance = new SearchPerformanceMetrics();
+                var enhancedResults = await PerformEnhancedPathSearch(searchParams, request.FilePaths, performance);
+
+                // Convert to the expected format
+                var searchResults = enhancedResults.DocumentResults
+                    .Concat(enhancedResults.WordResults)
+                    .Concat(enhancedResults.SentenceResults)
+                    .OrderByDescending(r => r.Score)
+                    .ToList();
+
                 var searchEndTime = stopwatch.Elapsed;
-                Console.WriteLine($"⏱️ Lucene search completed at: {searchEndTime.TotalSeconds:F2} seconds (took {(searchEndTime - searchStartTime).TotalSeconds:F2} seconds)");
+                Console.WriteLine($"⏱️ Enhanced search completed at: {searchEndTime.TotalSeconds:F2} seconds (took {(searchEndTime - searchStartTime).TotalSeconds:F2} seconds)");
+                Console.WriteLine($"📊 Multi-level results: Documents={enhancedResults.DocumentResults.Count}, Words={enhancedResults.WordResults.Count}, Sentences={enhancedResults.SentenceResults.Count}");
 
                 if (!searchResults.Any())
                 {
@@ -374,7 +534,7 @@ namespace mvctest.Controllers
 
                     // 🎯 SMART EARLY TERMINATION LOGIC
                     enhancedAnswer = await GenerateAnswerWithEarlyTermination(request.Query, detailedResults);
-                    
+
                     aiEndTime = stopwatch.Elapsed;
                     Console.WriteLine($"⏱️ AI generation completed at: {aiEndTime.TotalSeconds:F2} seconds (took {(aiEndTime - aiStartTime).TotalSeconds:F2} seconds)");
                 }
@@ -396,7 +556,7 @@ namespace mvctest.Controllers
                 stopwatch.Stop();
                 var totalTimeMinutes = stopwatch.Elapsed.TotalMinutes;
                 var totalTimeSeconds = stopwatch.Elapsed.TotalSeconds;
-                
+
                 Console.WriteLine($"⏱️ DeepContentSearch COMPLETED:");
                 Console.WriteLine($"   📊 Total Time: {totalTimeMinutes:F2} minutes ({totalTimeSeconds:F2} seconds)");
                 Console.WriteLine($"   📁 Files Processed: {request.FilePaths.Count}");
@@ -439,14 +599,214 @@ namespace mvctest.Controllers
                 stopwatch.Stop();
                 var errorTimeMinutes = stopwatch.Elapsed.TotalMinutes;
                 var errorTimeSeconds = stopwatch.Elapsed.TotalSeconds;
-                
+
                 Console.WriteLine($"❌ DeepContentSearch ERROR after {errorTimeMinutes:F2} minutes ({errorTimeSeconds:F2} seconds):");
                 Console.WriteLine($"   Error: {ex.Message}");
                 Console.WriteLine($"   StackTrace: {ex.StackTrace}");
-                
+
                 TempData["ErrorMessage"] = $"Failed to perform optimized content search: {ex.Message}";
                 return RedirectToAction("Error", "Home", new { message = ex.Message });
             }
+        }
+
+        private string ExtractCompleteSentence(string snippet)
+        {
+            if (string.IsNullOrWhiteSpace(snippet))
+                return string.Empty;
+
+            try
+            {
+                // Remove "Sentence N:" prefix if it exists
+                var cleanSnippet = System.Text.RegularExpressions.Regex.Replace(snippet, @"^Sentence \d+:\s*", "").Trim();
+                
+                if (string.IsNullOrWhiteSpace(cleanSnippet))
+                    return string.Empty;
+
+                // Handle Excel structured data (detect by presence of [ROW] or [SHEET] markers)
+                if (cleanSnippet.Contains("[ROW") || cleanSnippet.Contains("[SHEET") || cleanSnippet.Contains(" | "))
+                {
+                    return ExtractStructuredDataSnippet(cleanSnippet);
+                }
+
+                // If the snippet already looks like a complete sentence, return it
+                if (cleanSnippet.Length > 10 && cleanSnippet.EndsWith('.'))
+                {
+                    return cleanSnippet;
+                }
+
+                // Remove any HTML tags like <strong> for text processing, but keep original for return
+                var textOnly = System.Text.RegularExpressions.Regex.Replace(cleanSnippet, @"<[^>]+>", "");
+                
+                if (string.IsNullOrWhiteSpace(textOnly))
+                    return cleanSnippet; // Return original if only HTML tags
+
+                // Find sentence boundaries using regex (more reliable)
+                var sentences = System.Text.RegularExpressions.Regex.Split(textOnly, @"(?<=[.!?])\s+(?=[A-Z])")
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .ToList();
+
+                if (sentences.Count == 0)
+                    return cleanSnippet;
+
+                // If we have multiple sentences, take the first complete one
+                var firstSentence = sentences[0].Trim();
+                
+                // If the first sentence doesn't end with punctuation, try to find a complete sentence
+                if (!firstSentence.EndsWith('.') && !firstSentence.EndsWith('!') && !firstSentence.EndsWith('?'))
+                {
+                    // Look for the first complete sentence
+                    var completeSentence = sentences.FirstOrDefault(s => s.Trim().EndsWith('.') || s.Trim().EndsWith('!') || s.Trim().EndsWith('?'));
+                    if (!string.IsNullOrEmpty(completeSentence))
+                    {
+                        firstSentence = completeSentence.Trim();
+                    }
+                    else
+                    {
+                        // If no complete sentence found, add a period to the first sentence
+                        firstSentence = firstSentence.TrimEnd() + ".";
+                    }
+                }
+
+                // Map back to original with HTML tags preserved
+                var result = MapSentenceBackToOriginal(cleanSnippet, firstSentence);
+                return string.IsNullOrWhiteSpace(result) ? cleanSnippet : result;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ExtractCompleteSentence: {ex.Message}");
+                return snippet; // Return original on any error
+            }
+        }
+
+        private string ExtractStructuredDataSnippet(string snippet)
+        {
+            try
+            {
+                // For Excel structured data, extract meaningful content while preserving structure
+                var lines = snippet.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(line => line.Trim())
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .ToList();
+
+                var meaningfulLines = new List<string>();
+
+                foreach (var line in lines)
+                {
+                    // Skip structural markers that don't contain data
+                    if (line.StartsWith("[ROW") && line.EndsWith("]") && !line.Contains("|"))
+                        continue;
+                    if (line.StartsWith("[END ROW") && line.EndsWith("]"))
+                        continue;
+                    if (line.StartsWith("[SHEET") && line.EndsWith("]"))
+                        continue;
+                    if (line.StartsWith("[END SHEET") && line.EndsWith("]"))
+                        continue;
+
+                    // Keep lines with actual data (containing | separators or meaningful content)
+                    if (line.Contains(" | ") || (!line.StartsWith("[") && !line.EndsWith("]")))
+                    {
+                        meaningfulLines.Add(line);
+                    }
+                }
+
+                // If we have meaningful content, format it nicely
+                if (meaningfulLines.Any())
+                {
+                    // Limit to first 2-3 meaningful lines to avoid overly long snippets
+                    var limitedLines = meaningfulLines.Take(3).ToList();
+                    
+                    // Format the data nicely
+                    var result = string.Join(" • ", limitedLines);
+                    
+                    // Ensure it ends with proper punctuation
+                    if (!result.EndsWith('.') && !result.EndsWith('!') && !result.EndsWith('?'))
+                    {
+                        result += ".";
+                    }
+                    
+                    return result;
+                }
+
+                // Fallback: return original snippet with added punctuation
+                var fallback = snippet.Trim();
+                if (!fallback.EndsWith('.') && !fallback.EndsWith('!') && !fallback.EndsWith('?'))
+                {
+                    fallback += ".";
+                }
+                return fallback;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ExtractStructuredDataSnippet: {ex.Message}");
+                // Return original with punctuation as fallback
+                var fallback = snippet.Trim();
+                if (!fallback.EndsWith('.') && !fallback.EndsWith('!') && !fallback.EndsWith('?'))
+                {
+                    fallback += ".";
+                }
+                return fallback;
+            }
+        }
+
+        private string MapSentenceBackToOriginal(string originalWithTags, string textOnlySentence)
+        {
+            if (string.IsNullOrWhiteSpace(textOnlySentence))
+                return string.Empty;
+
+            try
+            {
+                // Simple approach: find the text in the original and extract up to its end
+                var textOnly = System.Text.RegularExpressions.Regex.Replace(originalWithTags, @"<[^>]+>", "");
+                var endIndex = textOnly.IndexOf(textOnlySentence.TrimEnd('.', '!', '?'));
+                
+                if (endIndex >= 0)
+                {
+                    var endPos = endIndex + textOnlySentence.TrimEnd('.', '!', '?').Length;
+                    
+                    // Find corresponding position in original with tags
+                    var result = new System.Text.StringBuilder();
+                    var originalIndex = 0;
+                    var textOnlyIndex = 0;
+                    
+                    while (originalIndex < originalWithTags.Length && textOnlyIndex <= endPos)
+                    {
+                        if (originalWithTags[originalIndex] == '<')
+                        {
+                            // Copy HTML tag
+                            while (originalIndex < originalWithTags.Length && originalWithTags[originalIndex] != '>')
+                            {
+                                result.Append(originalWithTags[originalIndex]);
+                                originalIndex++;
+                            }
+                            if (originalIndex < originalWithTags.Length)
+                            {
+                                result.Append(originalWithTags[originalIndex]);
+                                originalIndex++;
+                            }
+                        }
+                        else
+                        {
+                            result.Append(originalWithTags[originalIndex]);
+                            originalIndex++;
+                            textOnlyIndex++;
+                        }
+                    }
+                    
+                    var finalResult = result.ToString().Trim();
+                    if (!finalResult.EndsWith('.') && !finalResult.EndsWith('!') && !finalResult.EndsWith('?'))
+                    {
+                        finalResult += ".";
+                    }
+                    
+                    return finalResult;
+                }
+            }
+            catch
+            {
+                // If mapping fails, return original
+            }
+
+            return originalWithTags;
         }
 
         private async Task<string> GenerateAIAnswer(string query, List<SearchResultModel> results)
@@ -483,5 +843,87 @@ namespace mvctest.Controllers
         public string Query { get; set; } = string.Empty;
         public List<string> FilePaths { get; set; } = new List<string>();
         public string? QueryId { get; set; }
+    }
+
+    public enum SearchMode
+    {
+        Comprehensive,  // Default - searches all levels
+        WordLevel,      // Word-by-word search
+        SentenceLevel,  // Sentence-by-sentence search
+        DocumentLevel,  // Main document content only
+        Semantic,       // Semantic/embedding-based search
+        Hybrid         // Combines multiple approaches
+    }
+
+    public enum SearchResultSort
+    {
+        Relevance,      // Default - by search score
+        Date,           // By indexed date
+        FileName,       // Alphabetical by filename
+        FileSize,       // By file size
+        WordFrequency,  // By word frequency (for word searches)
+        SentenceIndex   // By sentence position (for sentence searches)
+    }
+
+    public class AdvancedSearchParameters
+    {
+        public string Query { get; set; } = string.Empty;
+        public SearchMode Mode { get; set; } = SearchMode.Comprehensive;
+        public SearchResultSort SortBy { get; set; } = SearchResultSort.Relevance;
+        public string? FileType { get; set; }
+        public DateTime? DateFrom { get; set; }
+        public DateTime? DateTo { get; set; }
+        public int? MinWordCount { get; set; }
+        public int? MaxResults { get; set; } = 50;
+        public bool IncludeContext { get; set; } = true;
+        public bool ShowWordAnalysis { get; set; } = false;
+        public bool ShowSentenceContext { get; set; } = false;
+    }
+
+    public class EnhancedSearchResultsViewModel
+    {
+        public List<SearchResultModel> DocumentResults { get; set; } = new List<SearchResultModel>();
+        public List<SearchResultModel> WordResults { get; set; } = new List<SearchResultModel>();
+        public List<SearchResultModel> SentenceResults { get; set; } = new List<SearchResultModel>();
+        public SearchPerformanceMetrics Performance { get; set; } = new SearchPerformanceMetrics();
+        public SearchMode UsedMode { get; set; }
+        public string Query { get; set; } = string.Empty;
+        public int TotalResults { get; set; }
+    }
+
+    public class SearchPerformanceMetrics
+    {
+        public TimeSpan TotalSearchTime { get; set; }
+        public TimeSpan WordSearchTime { get; set; }
+        public TimeSpan SentenceSearchTime { get; set; }
+        public TimeSpan DocumentSearchTime { get; set; }
+        public TimeSpan SemanticSearchTime { get; set; }
+        public int TotalDocumentsSearched { get; set; }
+        public int WordMatchesFound { get; set; }
+        public int SentenceMatchesFound { get; set; }
+        public int DocumentMatchesFound { get; set; }
+    }
+
+    public class WordAnalysisData
+    {
+        public string Word { get; set; } = string.Empty;
+        public int Frequency { get; set; }
+        public List<int> Positions { get; set; } = new List<int>();
+        public string Context { get; set; } = string.Empty;
+        public int FirstPosition { get; set; }
+    }
+
+    public class SentenceContextData
+    {
+        public string Sentence { get; set; } = string.Empty;
+        public int SentenceIndex { get; set; }
+        public string? PreviousSentence { get; set; }
+        public string? NextSentence { get; set; }
+        public string ParentFile { get; set; } = string.Empty;
+    }
+
+    public class ClassifyDocumentRequest
+    {
+        public string FilePath { get; set; } = string.Empty;
     }
 }

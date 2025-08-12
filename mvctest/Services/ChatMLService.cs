@@ -23,7 +23,18 @@ namespace mvctest.Services
         private readonly HttpClient _httpClient;
         private readonly IContentManager _contentManager;
         private readonly ILuceneInterface _luceneInterface;
-        private readonly string Prompt = "Write a brief summary of this document in 2-3 sentences. State only what the document is about and what it contains. Do not include reasoning, analysis, or explanations of your process:\n\n";
+        private readonly string Prompt = @"
+                     Please provide a clear and concise summary of this document.
+
+                     Instructions:
+                     - Write a brief summary in 2-3 sentences about what the document is about and what it contains
+                     - Include key details such as: main purpose, important names/entities, dates, amounts, or key topics
+                     - Focus on the most important information that would help someone understand the document quickly
+                     - Be direct and factual - do not include reasoning, analysis, or explanations of your process
+                     - If the document content is unclear or corrupted, clearly state this limitation
+
+                     Document Content:
+                     ";
 
 
         public ChatMLService(IOptions<AppSettings> options, HttpClient httpClient, IContentManager contentManager, ILuceneInterface luceneInterface)
@@ -197,38 +208,67 @@ namespace mvctest.Services
             return message ?? "No response from ChatGPT.";
         }
 
+        // Static HttpClient for DeepSeek streaming (better performance - reuse connections)
+        private static readonly HttpClient _deepSeekHttpClient = new HttpClient()
+        {
+            Timeout = TimeSpan.FromMinutes(5)
+        };
+
         public async Task<string> DeepSeekSummarizeWithStreaming(string filePath, string prompt = "", string usermessage = "")
         {
             var stopwatch = Stopwatch.StartNew();
 
-            using var client = new HttpClient();
-
             string fileContent = "";
 
-            // If file exists, extract text
-            if (File.Exists(filePath))
+            // Optimized content extraction
+            if (!string.IsNullOrWhiteSpace(usermessage))
             {
-                fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
-
-                if (fileContent.Length > 100000)
-                    fileContent = fileContent.Substring(0, 100000) + "... [truncated]";
-            }
-            else if (!string.IsNullOrWhiteSpace(usermessage))
-            {
-                // If file not found but usermessage is available, use it instead
+                // Prioritize user message (already processed content)
                 fileContent = usermessage;
+            }
+            else if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+            {
+                // Only extract file if usermessage is not provided
+                fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
             }
             else
             {
-                // If both file and usermessage are empty, throw error
                 throw new FileNotFoundException("File not found and user message is empty!");
             }
 
+            // Smart content truncation with better limits
+            const int maxContentLength = 50000; // Reduced from 100k for faster processing
+            if (fileContent.Length > maxContentLength)
+            {
+                // Try to truncate at sentence boundaries for better context
+                var truncatedContent = fileContent.Substring(0, maxContentLength);
+                var lastSentenceEnd = Math.Max(
+                    Math.Max(truncatedContent.LastIndexOf('.'), truncatedContent.LastIndexOf('!')),
+                    truncatedContent.LastIndexOf('?')
+                );
+                
+                if (lastSentenceEnd > maxContentLength * 0.8) // Only use sentence boundary if it's not too early
+                {
+                    fileContent = truncatedContent.Substring(0, lastSentenceEnd + 1) + " [Content truncated for performance]";
+                }
+                else
+                {
+                    fileContent = truncatedContent + "... [Content truncated for performance]";
+                }
+            }
+
+            // Optimized request body with faster model
             var requestBody = new
             {
-                model = "deepseek-r1:1.5b",
-                prompt = prompt + fileContent,
-                stream = true
+                model = "deepseek-r1:1.5b", 
+                prompt = $"{prompt}\n\n{fileContent}",
+                stream = true,
+                options = new
+                {
+                    temperature = 0.3, // Lower temperature for more focused responses
+                    top_p = 0.9,
+                    num_ctx = 4096 // Limit context window for faster processing
+                }
             };
 
             var json = JsonSerializer.Serialize(requestBody);
@@ -238,36 +278,77 @@ namespace mvctest.Services
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
 
-            var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            // Use reduced timeout for better user experience
+            var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
 
-            using var response = await client.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationTokenSource.Token);
-
-            response.EnsureSuccessStatusCode(); // Will throw if status code != 200 OK
-
-            using var stream = await response.Content.ReadAsStreamAsync();
-            using var reader = new StreamReader(stream);
-
-            var sb = new StringBuilder();
-            while (!reader.EndOfStream)
+            try
             {
-                var line = await reader.ReadLineAsync();
-                if (!string.IsNullOrWhiteSpace(line) && line.StartsWith("{"))
+                using var response = await _deepSeekHttpClient.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationTokenSource.Token);
+
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync();
+                using var reader = new StreamReader(stream);
+
+                var sb = new StringBuilder();
+                var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+                // Optimized streaming with early termination
+                while (!reader.EndOfStream && !cancellationTokenSource.Token.IsCancellationRequested)
                 {
-                    var jsonObj = JsonSerializer.Deserialize<JsonElement>(line);
-                    if (jsonObj.TryGetProperty("response", out var responseChunk))
+                    var line = await reader.ReadLineAsync();
+                    if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("{")) continue;
+
+                    try
                     {
-                        sb.Append(responseChunk.GetString());
+                        var jsonObj = JsonSerializer.Deserialize<JsonElement>(line, jsonOptions);
+                        
+                        // Check for completion
+                        if (jsonObj.TryGetProperty("done", out var doneProperty) && doneProperty.GetBoolean())
+                        {
+                            break; // Stream is complete
+                        }
+
+                        if (jsonObj.TryGetProperty("response", out var responseChunk))
+                        {
+                            var chunk = responseChunk.GetString();
+                            if (!string.IsNullOrEmpty(chunk))
+                            {
+                                sb.Append(chunk);
+                                
+                                // Early termination for long responses to improve performance
+                                if (sb.Length > 5000) // Limit response length
+                                {
+                                    sb.Append(" [Response truncated for performance]");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Skip malformed JSON lines
+                        continue;
                     }
                 }
+
+                stopwatch.Stop();
+                Console.WriteLine($"SummarizeWithStreaming executed in {stopwatch.ElapsedMilliseconds} ms (Content: {fileContent.Length} chars, Response: {sb.Length} chars)");
+
+                return sb.ToString();
             }
-
-            stopwatch.Stop();
-            Console.WriteLine($"SummarizeWithStreaming executed in {stopwatch.ElapsedMilliseconds} ms");
-
-            return sb.ToString();
+            catch (OperationCanceledException)
+            {
+                return "Response timeout - the operation took too long. Please try with a shorter document or query.";
+            }
+            catch (HttpRequestException ex)
+            {
+                Console.WriteLine($"HTTP Error in DeepSeekSummarizeWithStreaming: {ex.Message}");
+                return "Service temporarily unavailable. Please try again later.";
+            }
         }
 
         public async Task<string> GetFileSummaryAsync(string filePath)

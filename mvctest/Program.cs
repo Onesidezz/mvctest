@@ -35,12 +35,19 @@ builder.Services.AddSingleton<HighResolutionTextAnalyzer>();
 // ===== 4. Register HTTP & Session Services =====
 builder.Services.AddHttpClient(); // 👈 Register HttpClientFactory
 builder.Services.AddHttpContextAccessor(); // 👈 For accessing HttpContext in services
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestHeadersTotalSize = 65536; // 64 KB - increased from 32 KB to handle larger headers
+    options.Limits.MaxRequestHeaderCount = 100; // Increase header count limit
+});
 
 builder.Services.AddSession(options =>
 {
     options.IdleTimeout = TimeSpan.FromMinutes(30);
     options.Cookie.HttpOnly = true;
     options.Cookie.IsEssential = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
 });
 
 // In Program.cs
