@@ -345,6 +345,78 @@
             transform: none;
         }
 
+        /* Analytics Dropdown Styles */
+        .analytics-dropdown {
+            position: relative;
+            margin-left: auto;
+        }
+
+        .analytics-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+
+        .analytics-btn:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .analytics-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 0.375rem;
+            box-shadow: 0 4px 6px var(--shadow);
+            min-width: 140px;
+            z-index: 1000;
+            display: none;
+            margin-top: 0.25rem;
+        }
+
+        .analytics-menu.show {
+            display: block;
+        }
+
+        .analytics-menu-item {
+            padding: 0.5rem 0.75rem;
+            font-size: 0.75rem;
+            color: var(--dark);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+
+        .analytics-menu-item:hover {
+            background: var(--light);
+            color: var(--primary);
+        }
+
+        .analytics-menu-item:first-child {
+            border-radius: 0.375rem 0.375rem 0 0;
+        }
+
+        .analytics-menu-item:last-child {
+            border-radius: 0 0 0.375rem 0.375rem;
+        }
+
         .summary-content {
             margin-top: 1rem;
         }
@@ -952,18 +1024,40 @@
                                 <div class="summary-section">
                                     <div class="summary-header">
                                         <i class="fas fa-brain"></i>
-                                        <span>AI Summary</span>
-                                        <button type="button" class="summary-btn" data-filepath="@result.FilePath">
-                                            <i class="fas fa-brain"></i>
-                                            Get Summary
-                                        </button>
+                                        <span>AI Analytics</span>
+                                        <div class="analytics-dropdown">
+                                            <button type="button" class="analytics-btn" data-filepath="@result.FilePath">
+                                                <i class="fas fa-chart-line"></i>
+                                                Analytics
+                                                <i class="fas fa-chevron-down"></i>
+                                            </button>
+                                            <div class="analytics-menu">
+                                                <button type="button" class="analytics-menu-item summary-option" data-filepath="@result.FilePath">
+                                                    <i class="fas fa-brain"></i>
+                                                    Get Summary
+                                                </button>
+                                                <button type="button" class="analytics-menu-item ask-ai-option" data-filepath="@result.FilePath">
+                                                    <i class="fas fa-robot"></i>
+                                                    Ask AI
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="summary-content" style="display: none;">
                                         <div class="summary-loading">
                                             <i class="fas fa-spinner fa-spin"></i>
-                                            Generating summary...
+                                            Generating response...
                                         </div>
                                         <div class="summary-text"></div>
+                                    </div>
+                                    <div class="ask-ai-content" style="display: none;">
+                                        <div class="search-input-group" style="margin-bottom: 1rem;">
+                                            <input type="text" class="ask-ai-input" placeholder="Ask a question about this document..." style="flex: 1; padding: 0.75rem; border: 2px solid var(--border); border-radius: 0.5rem; font-size: 0.875rem;" />
+                                            <button type="button" class="ask-ai-submit" style="padding: 0.75rem 1rem; background: var(--primary); color: white; border: none; border-radius: 0.5rem; cursor: pointer;">
+                                                <i class="fas fa-paper-plane"></i>
+                                            </button>
+                                        </div>
+                                        <div class="ask-ai-response" style="display: none; padding: 1rem; background: var(--light); border-radius: 0.5rem; border-left: 3px solid var(--info);"></div>
                                     </div>
                                 </div>
 
@@ -1064,7 +1158,7 @@
                 }, 1500);
 
                 $.ajax({
-                    url: '@Url.Action("DeepContentSearch", "ContentManager")',
+                    url: '@Url.Action("AIAnalytics", "ContentManager")',
                     type: 'POST',
                     contentType: 'application/json',
                     data: JSON.stringify({ 
@@ -1074,7 +1168,7 @@
                     }),
                     global: false,
                     success: function(data) {
-                        console.log('DeepContentSearch response:', data);
+                        console.log('AIAnalytics response:', data);
                         
                         // Ensure we have a valid response
                         if (!data || typeof data !== 'object') {
@@ -1172,19 +1266,45 @@
                 }
             });
 
-            $('.summary-btn').on('click', function() {
+            // Analytics dropdown toggle
+            $('.analytics-btn').on('click', function(e) {
+                e.stopPropagation();
+                var $menu = $(this).siblings('.analytics-menu');
+                
+                // Close all other dropdowns
+                $('.analytics-menu').not($menu).removeClass('show');
+                
+                // Toggle this dropdown
+                $menu.toggleClass('show');
+            });
+
+            // Close dropdown when clicking outside
+            $(document).on('click', function() {
+                $('.analytics-menu').removeClass('show');
+            });
+
+            // Prevent dropdown from closing when clicking inside
+            $('.analytics-menu').on('click', function(e) {
+                e.stopPropagation();
+            });
+
+            // Handle Get Summary option
+            $('.summary-option').on('click', function() {
                 var filePath = $(this).data('filepath');
-                var $button = $(this);
-                var $summaryContent = $button.closest('.summary-section').find('.summary-content');
+                var $summarySection = $(this).closest('.summary-section');
+                var $summaryContent = $summarySection.find('.summary-content');
+                var $askAiContent = $summarySection.find('.ask-ai-content');
                 var $summaryText = $summaryContent.find('.summary-text');
                 
-                // Show immediate feedback with typing effect
+                // Hide Ask AI content and show Summary content
+                $askAiContent.hide();
                 $summaryContent.show();
                 $summaryText.show();
                 $summaryText.addClass('show');
                 $summaryText.html('');
-                $button.prop('disabled', true);
-                $button.html('<i class="fas fa-brain"></i> Generating...');
+                
+                // Close dropdown
+                $('.analytics-menu').removeClass('show');
                 
                 // Start typing effect immediately
                 typeWriter('🧠 Analyzing document...', $summaryText, 50);
@@ -1194,25 +1314,114 @@
                     type: 'POST',
                     contentType: 'application/json',
                     data: JSON.stringify({ filePath: filePath }),
-                    global: false, // This prevents the global AJAX loader from showing
+                    global: false,
                     success: function(data) {
-                        // Clear and start typing the real summary
                         $summaryText.html('');
-                        typeWriter(data.summary, $summaryText, 25, function() {
-                            $button.html('<i class="fas fa-check"></i> Complete');
-                            $button.css('background', 'var(--success)');
-                        });
+                        typeWriter(data.summary, $summaryText, 25);
                     },
                     error: function(xhr, status, error) {
                         var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : error;
                         $summaryText.html('');
-                        typeWriter('❌ Error: ' + errorMessage, $summaryText, 50, function() {
-                            $button.prop('disabled', false);
-                            $button.html('<i class="fas fa-brain"></i> Get Summary');
-                            $button.css('background', 'var(--danger)');
-                        });
+                        typeWriter('❌ Error: ' + errorMessage, $summaryText, 50);
                     }
                 });
+            });
+
+            // Handle Ask AI option
+            $('.ask-ai-option').on('click', function() {
+                var filePath = $(this).data('filepath');
+                var $summarySection = $(this).closest('.summary-section');
+                var $summaryContent = $summarySection.find('.summary-content');
+                var $askAiContent = $summarySection.find('.ask-ai-content');
+                
+                // Hide Summary content and show Ask AI content
+                $summaryContent.hide();
+                $askAiContent.show();
+                
+                // Close dropdown
+                $('.analytics-menu').removeClass('show');
+                
+                // Focus on input
+                $askAiContent.find('.ask-ai-input').focus();
+            });
+
+            // Handle Ask AI submit
+            $('.ask-ai-submit').on('click', function() {
+                var $askAiContent = $(this).closest('.ask-ai-content');
+                var $input = $askAiContent.find('.ask-ai-input');
+                var $response = $askAiContent.find('.ask-ai-response');
+                var question = $input.val().trim();
+                var filePath = $(this).closest('.summary-section').find('.analytics-btn').data('filepath');
+                
+                if (!question) {
+                    alert('Please enter a question.');
+                    return;
+                }
+                
+                $response.show();
+                $response.html('');
+                typeWriter('🤖 Analyzing document to answer your question...', $response, 50);
+                
+                $.ajax({
+                    url: '@Url.Action("AIAnalytics", "ContentManager")',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ 
+                        query: question,
+                        filePaths: [filePath],
+                        FromAnalytics : true,
+                        queryId: queryId && queryId !== '' ? queryId : null
+                    }),
+                    global: false,
+                    success: function(data) {
+                        $response.html('');
+                        if (data.answer) {
+                            var responseHtml = data.answer;
+                            
+                            // Append timing information if available
+                            if (data.searchMetadata) {
+                                var timingHtml = '<div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--secondary);">';
+                                timingHtml += '<div style="display: flex; gap: 1rem; flex-wrap: wrap;">';
+                                
+                                if (data.searchMetadata.totalTimeSeconds !== undefined) {
+                                    timingHtml += '<span><i class="fas fa-clock"></i> Total: ' + data.searchMetadata.totalTimeSeconds.toFixed(2) + 's</span>';
+                                }
+                                
+                                if (data.searchMetadata.performanceBreakdown) {
+                                    if (data.searchMetadata.performanceBreakdown.searchTimeSeconds !== undefined) {
+                                        timingHtml += '<span><i class="fas fa-search"></i> Search: ' + data.searchMetadata.performanceBreakdown.searchTimeSeconds.toFixed(2) + 's</span>';
+                                    }
+                                    if (data.searchMetadata.performanceBreakdown.aiGenerationTimeSeconds !== undefined) {
+                                        timingHtml += '<span><i class="fas fa-brain"></i> AI: ' + data.searchMetadata.performanceBreakdown.aiGenerationTimeSeconds.toFixed(2) + 's</span>';
+                                    }
+                                }
+                                
+                                if (data.searchMetadata.resultsFound !== undefined) {
+                                    timingHtml += '<span><i class="fas fa-file"></i> Results: ' + data.searchMetadata.resultsFound + '</span>';
+                                }
+                                
+                                timingHtml += '</div></div>';
+                                responseHtml += timingHtml;
+                            }
+                            
+                            $response.html(responseHtml);
+                        } else {
+                            typeWriter('❌ No answer received from the AI.', $response, 50);
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : error;
+                        $response.html('');
+                        typeWriter('❌ Error: ' + errorMessage, $response, 50);
+                    }
+                });
+            });
+
+            // Allow Enter key for Ask AI
+            $('.ask-ai-input').on('keypress', function(e) {
+                if (e.which === 13) {
+                    $(this).siblings('.ask-ai-submit').click();
+                }
             });
         });
 

@@ -430,359 +430,6 @@ namespace mvctest.Controllers
             return patterns.Any(pattern => System.Text.RegularExpressions.Regex.IsMatch(query, pattern));
         }
 
-        private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformSemanticPreFiltering(string query, List<string> filePaths)
-        {
-            try
-            {
-                Console.WriteLine($"🚀 Starting INTELLIGENT pre-filtering for query: '{query}' across {filePaths.Count} files");
-
-                // Use the new IntelligentSearchOrchestrator for better query analysis and ranking
-                var serviceProvider = HttpContext.RequestServices;
-                var logger = serviceProvider.GetRequiredService<ILogger<IntelligentSearchOrchestrator>>();
-                var orchestrator = new IntelligentSearchOrchestrator(_luceneInterface, logger);
-
-                // Perform smart search with proper exact match prioritization
-                var results = await orchestrator.SmartSearchAsync(query, filePaths);
-
-                Console.WriteLine($"✅ Intelligent search completed: {results.Count} results found");
-                foreach (var result in results.Take(5))
-                {
-                    Console.WriteLine($"  📄 {Path.GetFileName(result.filePath)}: Score={result.similarity:F3}, Type={result.documentType}");
-                }
-
-                return results;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ Error in intelligent pre-filtering: {ex.Message}");
-                // Fallback to the old hybrid search on error
-                return await PerformHybridSearch(query, filePaths);
-            }
-        }
-
-        private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformHybridSearch(string query, List<string> filePaths)
-        {
-            Console.WriteLine("🔄 Performing HYBRID search combining semantic and keyword approaches");
-
-            var hybridResults = new Dictionary<string, HybridSearchResult>();
-
-            // Step 1: Perform keyword search
-            var keywordResults = await PerformKeywordPreFiltering(query, filePaths);
-            foreach (var result in keywordResults)
-            {
-                if (!hybridResults.ContainsKey(result.filePath))
-                {
-                    hybridResults[result.filePath] = new HybridSearchResult
-                    {
-                        FilePath = result.filePath,
-                        KeywordScore = result.similarity,
-                        RelevantChunks = result.relevantChunks,
-                        DocumentType = result.documentType
-                    };
-                }
-            }
-
-            // Step 2: Perform semantic search (if model available)
-            var semanticResults = await PerformPureSemanticSearch(query, filePaths);
-            foreach (var result in semanticResults)
-            {
-                if (hybridResults.ContainsKey(result.filePath))
-                {
-                    hybridResults[result.filePath].SemanticScore = result.similarity;
-                    // Merge chunks
-                    if (result.relevantChunks.Any())
-                    {
-                        hybridResults[result.filePath].RelevantChunks.AddRange(result.relevantChunks);
-                    }
-                }
-                else
-                {
-                    hybridResults[result.filePath] = new HybridSearchResult
-                    {
-                        FilePath = result.filePath,
-                        SemanticScore = result.similarity,
-                        RelevantChunks = result.relevantChunks,
-                        DocumentType = result.documentType
-                    };
-                }
-            }
-
-            // Step 3: Calculate combined scores
-            var finalResults = new List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>();
-
-            foreach (var result in hybridResults.Values)
-            {
-                // Weighted combination: Give more weight to exact matches
-                float combinedScore;
-
-                if (result.DocumentType == "exact_match")
-                {
-                    // Exact matches get maximum score
-                    combinedScore = 1.0f;
-                }
-                else if (result.KeywordScore > 0 && result.SemanticScore > 0)
-                {
-                    // Both scores available - weighted average
-                    combinedScore = (result.KeywordScore * 0.4f) + (result.SemanticScore * 0.6f);
-                }
-                else if (result.KeywordScore > 0)
-                {
-                    // Only keyword score
-                    combinedScore = result.KeywordScore * 0.7f; // Slight penalty for no semantic match
-                }
-                else
-                {
-                    // Only semantic score
-                    combinedScore = result.SemanticScore * 0.9f; // Small penalty for no keyword match
-                }
-
-                // Boost for specific patterns
-                combinedScore = ApplySmartBoosts(query, result.FilePath, combinedScore);
-
-                finalResults.Add((
-                    result.FilePath,
-                    Math.Min(1.0f, combinedScore),
-                    result.RelevantChunks.Distinct().Take(5).ToList(),
-                    result.DocumentType
-                ));
-
-                Console.WriteLine($"  📊 {System.IO.Path.GetFileName(result.FilePath)}: " +
-                                 $"Keyword={result.KeywordScore:F3}, Semantic={result.SemanticScore:F3}, " +
-                                 $"Combined={combinedScore:F3}");
-            }
-
-            // Sort by combined score
-            return finalResults.OrderByDescending(r => r.similarity).ToList();
-        }
-
-        private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformPureSemanticSearch(string query, List<string> filePaths)
-        {
-            var semanticMatches = new List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>();
-
-            try
-            {
-                Console.WriteLine($"🧠 Using stored ONNX embeddings for semantic search: '{query}'");
-
-                // Use the existing SemanticSearch method that leverages stored embeddings
-                var luceneResults = _luceneInterface.SemanticSearch(query, filePaths, 50);
-
-                if (luceneResults?.Any() == true)
-                {
-                    Console.WriteLine($"✅ Found {luceneResults.Count} results from stored embeddings");
-
-                    // Convert Lucene results to the expected format
-                    foreach (var result in luceneResults)
-                    {
-                        var relevantChunks = new List<string>();
-                        if (!string.IsNullOrEmpty(result.Content))
-                        {
-                            // Extract relevant snippets from the content
-                            var snippets = _luceneInterface.GetAllContentSnippets(result.Content, query, 300);
-                            relevantChunks = snippets.Take(3).ToList();
-                        }
-
-                        semanticMatches.Add((
-                            result.FilePath ?? result.FileName ?? "",
-                            result.Score, // This is the similarity score from cosine similarity
-                            relevantChunks,
-                            "semantic_match"
-                        ));
-
-                        Console.WriteLine($"  📄 {Path.GetFileName(result.FilePath ?? result.FileName)}: Similarity={result.Score:F3}");
-                    }
-                }
-                else
-                {
-                    Console.WriteLine("⚠️ No results found with stored ONNX embeddings");
-                }
-
-                return semanticMatches.OrderByDescending(m => m.similarity).ToList();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ Error in ONNX-based semantic search: {ex.Message}");
-                return semanticMatches;
-            }
-        }
-
-        private async Task<List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>> PerformKeywordPreFiltering(string query, List<string> filePaths)
-        {
-            var keywordMatches = new List<(string filePath, float similarity, List<string> relevantChunks, string documentType)>();
-
-            Console.WriteLine("Performing keyword-based filtering");
-
-            // Extract different types of search terms
-            var exactTerms = ExtractExactSearchTerms(query);
-            var importantWords = ExtractImportantWords(query);
-            var fuzzyTerms = GenerateFuzzyVariants(importantWords);
-
-            Console.WriteLine($"🎯 Exact terms: {string.Join(", ", exactTerms)}");
-            Console.WriteLine($"📝 Important words: {string.Join(", ", importantWords)}");
-            Console.WriteLine($"🔍 Fuzzy variants: {string.Join(", ", fuzzyTerms.Take(5))}...");
-
-            foreach (var filePath in filePaths)
-            {
-                try
-                {
-                    if (!System.IO.File.Exists(filePath)) continue;
-
-                    var content = Services.FileTextExtractor.ExtractTextFromFile(filePath);
-                    if (string.IsNullOrEmpty(content)) continue;
-
-                    var contentLower = content.ToLower();
-                    float similarity = 0f;
-                    var matchType = "keyword_match";
-                    var matchedTerms = new List<string>();
-
-                    // Check for exact matches (highest priority)
-                    foreach (var exactTerm in exactTerms)
-                    {
-                        if (content.Contains(exactTerm, StringComparison.OrdinalIgnoreCase))
-                        {
-                            similarity = 1.0f;
-                            matchType = "exact_match";
-                            matchedTerms.Add(exactTerm);
-                            Console.WriteLine($"🎯 EXACT MATCH in {System.IO.Path.GetFileName(filePath)}: '{exactTerm}'");
-                            break;
-                        }
-                    }
-
-                    // If no exact match, check important words
-                    if (similarity < 1.0f && importantWords.Any())
-                    {
-                        var wordMatches = 0;
-                        foreach (var word in importantWords)
-                        {
-                            if (contentLower.Contains(word.ToLower()))
-                            {
-                                wordMatches++;
-                                matchedTerms.Add(word);
-                            }
-                        }
-
-                        if (wordMatches > 0)
-                        {
-                            similarity = Math.Max(similarity, (float)wordMatches / importantWords.Count);
-
-                            // Boost for multiple word matches
-                            if (wordMatches >= 2)
-                            {
-                                similarity = Math.Min(1.0f, similarity * 1.2f);
-                            }
-                        }
-                    }
-
-                    // Check fuzzy matches (lower priority)
-                    if (similarity < 0.5f && fuzzyTerms.Any())
-                    {
-                        var fuzzyMatches = fuzzyTerms.Count(term => contentLower.Contains(term.ToLower()));
-                        if (fuzzyMatches > 0)
-                        {
-                            var fuzzyScore = (float)fuzzyMatches / fuzzyTerms.Count * 0.7f; // Lower weight for fuzzy
-                            similarity = Math.Max(similarity, fuzzyScore);
-                            matchType = "fuzzy_match";
-                        }
-                    }
-
-                    if (similarity > 0.1f)
-                    {
-                        var relevantChunks = ExtractSmartChunks(content, query, matchedTerms, 5);
-                        keywordMatches.Add((filePath, similarity, relevantChunks, matchType));
-                        Console.WriteLine($"  ✓ {System.IO.Path.GetFileName(filePath)} - {matchType} (score: {similarity:F3})");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"  ✗ Error processing {System.IO.Path.GetFileName(filePath)}: {ex.Message}");
-                }
-            }
-
-            return keywordMatches.OrderByDescending(m => m.similarity).ToList();
-        }
-
-        private QueryAnalysis AnalyzeQueryType(string query)
-        {
-            var analysis = new QueryAnalysis { Query = query };
-
-            if (string.IsNullOrWhiteSpace(query))
-            {
-                analysis.queryType = QueryType.Natural;
-                analysis.confidence = 0.5f;
-                return analysis;
-            }
-
-            var queryLower = query.ToLower();
-            var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-            // Check for exact search indicators
-            var exactIndicators = 0;
-            var naturalIndicators = 0;
-            var hybridIndicators = 0;
-
-            // Patterns suggesting exact search
-            if (System.Text.RegularExpressions.Regex.IsMatch(query, @"[0-9a-fA-F]{8}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{12}"))
-                exactIndicators += 3; // GUID
-
-            if (System.Text.RegularExpressions.Regex.IsMatch(query, @"\b[A-Z0-9]{6,}\b"))
-                exactIndicators += 2; // Code/ID
-
-            if (queryLower.Contains("find") || queryLower.Contains("locate") || queryLower.Contains("which file"))
-                exactIndicators += 1;
-
-            if (queryLower.Contains("exact") || queryLower.Contains("specifically"))
-                exactIndicators += 2;
-
-            // Patterns suggesting natural language
-            if (queryLower.Contains("what") || queryLower.Contains("how") || queryLower.Contains("why") ||
-                queryLower.Contains("when") || queryLower.Contains("who") || queryLower.Contains("explain"))
-                naturalIndicators += 2;
-
-            if (words.Length > 5)
-                naturalIndicators += 1;
-
-            if (queryLower.Contains("tell me about") || queryLower.Contains("describe") || queryLower.Contains("summary"))
-                naturalIndicators += 2;
-
-            // Patterns suggesting hybrid approach
-            if (queryLower.Contains("about") && words.Any(w => char.IsUpper(w[0]) && w.Length > 2))
-                hybridIndicators += 2; // "about John Smith" - name search but natural query
-
-            if (System.Text.RegularExpressions.Regex.IsMatch(query, @"\b[A-Z][a-z]+ [A-Z][a-z]+\b"))
-                hybridIndicators += 1; // Proper names
-
-            if (words.Length >= 3 && words.Length <= 5 && !queryLower.StartsWith("what") && !queryLower.StartsWith("how"))
-                hybridIndicators += 1; // Medium-length specific queries
-
-            // Determine query type based on indicators
-            var maxIndicator = Math.Max(exactIndicators, Math.Max(naturalIndicators, hybridIndicators));
-
-            if (maxIndicator == 0)
-            {
-                // Default to hybrid for uncertain cases
-                analysis.queryType = QueryType.Hybrid;
-                analysis.confidence = 0.5f;
-            }
-            else if (exactIndicators == maxIndicator)
-            {
-                analysis.queryType = QueryType.ExactSearch;
-                analysis.confidence = exactIndicators / 5.0f; // Normalize to 0-1
-            }
-            else if (naturalIndicators == maxIndicator)
-            {
-                analysis.queryType = QueryType.Natural;
-                analysis.confidence = naturalIndicators / 5.0f;
-            }
-            else
-            {
-                analysis.queryType = QueryType.Hybrid;
-                analysis.confidence = hybridIndicators / 3.0f;
-            }
-
-            analysis.confidence = Math.Min(1.0f, analysis.confidence);
-
-            return analysis;
-        }
-
         private List<string> ExtractImportantWords(string query)
         {
             var importantWords = new List<string>();
@@ -815,158 +462,6 @@ namespace mvctest.Controllers
             }
 
             return importantWords.Distinct().ToList();
-        }
-
-        private List<string> GenerateFuzzyVariants(List<string> words)
-        {
-            var variants = new HashSet<string>();
-
-            foreach (var word in words)
-            {
-                variants.Add(word.ToLower());
-                variants.Add(word.ToUpper());
-
-                // Add common variations
-                if (word.Length > 4)
-                {
-                    // Plural/singular
-                    if (word.EndsWith("s"))
-                        variants.Add(word.Substring(0, word.Length - 1));
-                    else
-                        variants.Add(word + "s");
-
-                    // Common suffixes
-                    if (word.EndsWith("ing"))
-                        variants.Add(word.Substring(0, word.Length - 3));
-                    else if (word.EndsWith("ed"))
-                        variants.Add(word.Substring(0, word.Length - 2));
-                }
-            }
-
-            return variants.ToList();
-        }
-
-        private List<string> ExtractSmartChunks(string content, string query, List<string> matchedTerms, int maxChunks)
-        {
-            var chunks = new List<string>();
-            var sentences = content.Split(new[] { '.', '!', '?', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-
-            // First, get chunks containing matched terms
-            foreach (var term in matchedTerms.Take(3)) // Limit to avoid too many chunks
-            {
-                foreach (var sentence in sentences)
-                {
-                    if (sentence.Contains(term, StringComparison.OrdinalIgnoreCase))
-                    {
-                        chunks.Add(sentence.Trim());
-                        if (chunks.Count >= maxChunks) break;
-                    }
-                }
-                if (chunks.Count >= maxChunks) break;
-            }
-
-            // If not enough chunks, add sentences with high keyword density
-            if (chunks.Count < maxChunks)
-            {
-                var queryWords = query.ToLower().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                var scoredSentences = sentences
-                    .Select(s => new
-                    {
-                        Sentence = s,
-                        Score = queryWords.Count(w => s.ToLower().Contains(w))
-                    })
-                    .Where(s => s.Score > 0 && !chunks.Contains(s.Sentence))
-                    .OrderByDescending(s => s.Score)
-                    .Take(maxChunks - chunks.Count);
-
-                chunks.AddRange(scoredSentences.Select(s => s.Sentence.Trim()));
-            }
-
-            return chunks.Distinct().Take(maxChunks).ToList();
-        }
-
-        private float ApplySmartBoosts(string query, string filePath, float baseScore)
-        {
-            float boost = 0f;
-            var fileName = System.IO.Path.GetFileName(filePath).ToLower();
-            var queryLower = query.ToLower();
-
-            // Boost if filename contains important query words
-            var importantWords = ExtractImportantWords(query);
-            foreach (var word in importantWords)
-            {
-                if (fileName.Contains(word.ToLower()))
-                {
-                    boost += 0.05f;
-                }
-            }
-
-            // Boost for recent files (if applicable)
-            try
-            {
-                var fileInfo = new System.IO.FileInfo(filePath);
-                var daysSinceModified = (DateTime.Now - fileInfo.LastWriteTime).TotalDays;
-                if (daysSinceModified < 7)
-                    boost += 0.03f;
-                else if (daysSinceModified < 30)
-                    boost += 0.01f;
-            }
-            catch { }
-
-            return Math.Min(1.0f, baseScore + boost);
-        }
-
-        private List<string> ExtractExactSearchTerms(string query)
-        {
-            var exactTerms = new List<string>();
-
-            // GUID pattern (more flexible)
-            var guidPattern = @"[0-9a-fA-F]{8}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{4}[-]?[0-9a-fA-F]{12}";
-            var guidMatches = System.Text.RegularExpressions.Regex.Matches(query, guidPattern);
-            foreach (System.Text.RegularExpressions.Match match in guidMatches)
-            {
-                exactTerms.Add(match.Value);
-                exactTerms.Add(match.Value.ToLower());
-                exactTerms.Add(match.Value.ToUpper());
-            }
-
-            // Email addresses
-            var emailPattern = @"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b";
-            var emailMatches = System.Text.RegularExpressions.Regex.Matches(query, emailPattern);
-            foreach (System.Text.RegularExpressions.Match match in emailMatches)
-            {
-                exactTerms.Add(match.Value);
-            }
-
-            // Phone numbers
-            var phonePattern = @"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b";
-            var phoneMatches = System.Text.RegularExpressions.Regex.Matches(query, phonePattern);
-            foreach (System.Text.RegularExpressions.Match match in phoneMatches)
-            {
-                exactTerms.Add(match.Value);
-            }
-
-            // Other patterns (codes, IDs, etc.)
-            var patterns = new[]
-            {
-        @"\b[A-Z0-9]{6,}\b", // Alphanumeric codes
-        @"\b\d{6,}\b",       // Long numbers
-        @"\b[A-Z0-9]+-\d+\b" // Hyphenated codes
-    };
-
-            foreach (var pattern in patterns)
-            {
-                var matches = System.Text.RegularExpressions.Regex.Matches(query, pattern);
-                foreach (System.Text.RegularExpressions.Match match in matches)
-                {
-                    if (!exactTerms.Contains(match.Value))
-                    {
-                        exactTerms.Add(match.Value);
-                    }
-                }
-            }
-
-            return exactTerms.Distinct().ToList();
         }
 
         #region Enhanced Search Methods
@@ -1575,47 +1070,67 @@ namespace mvctest.Controllers
         /// <summary>
         /// Perform enhanced search with path filtering
         /// </summary>
-        private async Task<EnhancedSearchResultsViewModel> PerformEnhancedPathSearch(AdvancedSearchParameters searchParams, List<string> filePaths, SearchPerformanceMetrics performance)
+        private async Task<EnhancedSearchResultsViewModel> PerformEnhancedPathSearch(
+            AdvancedSearchParameters searchParams,
+            List<string> filePaths,
+            SearchPerformanceMetrics performance,
+            bool fromAnalytics)
         {
             Console.WriteLine($"🚀 Starting enhanced path search for {filePaths.Count} specific files");
 
             var results = new EnhancedSearchResultsViewModel();
 
-            switch (searchParams.Mode)
+            if (!fromAnalytics)
             {
-                case SearchMode.WordLevel:
-                    results.WordResults = await PerformWordLevelPathSearch(searchParams.Query, filePaths, performance);
-                    break;
+                switch (searchParams.Mode)
+                {
+                    case SearchMode.WordLevel:
+                        results.WordResults = await PerformWordLevelPathSearch(searchParams.Query, filePaths, performance);
+                        break;
 
-                case SearchMode.SentenceLevel:
-                    results.SentenceResults = await PerformSentenceLevelPathSearch(searchParams.Query, filePaths, performance);
-                    break;
+                    case SearchMode.SentenceLevel:
+                        results.SentenceResults = await PerformSentenceLevelPathSearch(searchParams.Query, filePaths, performance);
+                        break;
 
-                case SearchMode.DocumentLevel:
-                    results.DocumentResults = await PerformDocumentLevelPathSearch(searchParams.Query, filePaths, performance);
-                    break;
+                    case SearchMode.DocumentLevel:
+                        results.DocumentResults = await PerformDocumentLevelPathSearch(searchParams.Query, filePaths, performance);
+                        break;
 
-                case SearchMode.Semantic:
-                    results.DocumentResults = await PerformSemanticPathSearch(searchParams.Query, filePaths, performance);
-                    break;
+                    case SearchMode.Hybrid:
+                    case SearchMode.Comprehensive:
+                    default:
+                        // Run all search types in parallel
+                        var documentTask1 = PerformDocumentLevelPathSearch(searchParams.Query, filePaths, performance);
+                        var wordTask1 = PerformWordLevelPathSearch(searchParams.Query, filePaths, performance);
+                        var sentenceTask1 = PerformSentenceLevelPathSearch(searchParams.Query, filePaths, performance);
 
-                case SearchMode.Hybrid:
-                case SearchMode.Comprehensive:
-                default:
-                    // Run all search types in parallel for path-specific search
-                    var documentTask = PerformDocumentLevelPathSearch(searchParams.Query, filePaths, performance);
-                    var wordTask = PerformWordLevelPathSearch(searchParams.Query, filePaths, performance);
-                    var sentenceTask = PerformSentenceLevelPathSearch(searchParams.Query, filePaths, performance);
+                        await Task.WhenAll(documentTask1, wordTask1, sentenceTask1);
 
-                    await Task.WhenAll(documentTask, wordTask, sentenceTask);
+                        results.DocumentResults = await documentTask1;
+                        results.WordResults = await wordTask1;
+                        results.SentenceResults = await sentenceTask1;
+                        break;
+                }
+            }
+            else
+            {
+                // Analytics mode always runs all searches
+                var documentTask2 = PerformDocumentLevelPathSearch(searchParams.Query, filePaths, performance);
+                var wordTask2 = PerformWordLevelPathSearch(searchParams.Query, filePaths, performance);
+                var sentenceTask2 = PerformSentenceLevelPathSearch(searchParams.Query, filePaths, performance);
 
-                    results.DocumentResults = await documentTask;
-                    results.WordResults = await wordTask;
-                    results.SentenceResults = await sentenceTask;
-                    break;
+                await Task.WhenAll(documentTask2, wordTask2, sentenceTask2);
+
+                results.DocumentResults = await documentTask2;
+                results.WordResults = await wordTask2;
+                results.SentenceResults = await sentenceTask2;
             }
 
-            results.TotalResults = results.DocumentResults.Count + results.WordResults.Count + results.SentenceResults.Count;
+            // Calculate total results count
+            results.TotalResults =
+                (results.DocumentResults?.Count ?? 0) +
+                (results.WordResults?.Count ?? 0) +
+                (results.SentenceResults?.Count ?? 0);
 
             Console.WriteLine($"✅ Enhanced path search completed: {results.TotalResults} total results");
             return results;
@@ -1721,109 +1236,6 @@ namespace mvctest.Controllers
             }
         }
 
-        /// <summary>
-        /// Perform semantic search on specific file paths
-        /// </summary>
-        private async Task<List<SearchResultModel>> PerformSemanticPathSearch(string query, List<string> filePaths, SearchPerformanceMetrics performance)
-        {
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            Console.WriteLine($"🧠 Semantic search in {filePaths.Count} specific files");
-
-            try
-            {
-                var results = _luceneInterface.SemanticSearch(query, filePaths, maxResults: 50) ?? new List<SearchResultModel>();
-
-                stopwatch.Stop();
-                performance.SemanticSearchTime = stopwatch.Elapsed;
-                performance.DocumentMatchesFound = results.Count;
-
-                Console.WriteLine($"✅ Semantic path search: {results.Count} matches in {stopwatch.ElapsedMilliseconds}ms");
-                return results;
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                Console.WriteLine($"❌ Error in semantic path search: {ex.Message}");
-                return new List<SearchResultModel>();
-            }
-        }
-
-        /// <summary>
-        /// Truncate snippet to specified length while preserving word boundaries and highlighting
-        /// </summary>
-        private string TruncateSnippet(string snippet, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(snippet) || snippet.Length <= maxLength)
-                return snippet;
-
-            string truncated;
-
-            // If snippet contains HTML tags (like <strong>), be more careful with truncation
-            if (snippet.Contains("<strong>") || snippet.Contains("</strong>"))
-            {
-                // Find a good truncation point that doesn't break HTML tags
-                truncated = snippet.Substring(0, Math.Min(maxLength, snippet.Length));
-
-                // Make sure we don't end in the middle of an HTML tag
-                var lastOpenTag = truncated.LastIndexOf("<strong>");
-                var lastCloseTag = truncated.LastIndexOf("</strong>");
-
-                if (lastOpenTag > lastCloseTag)
-                {
-                    // We have an unclosed <strong> tag, try to find the closing tag within reasonable limit
-                    var closeTagIndex = snippet.IndexOf("</strong>", lastOpenTag);
-                    if (closeTagIndex > 0 && closeTagIndex < maxLength + 50) // Allow some extra characters to complete the tag
-                    {
-                        truncated = snippet.Substring(0, closeTagIndex + 9); // Include </strong>
-                    }
-                    else
-                    {
-                        // Remove the incomplete tag
-                        truncated = truncated.Substring(0, lastOpenTag);
-                    }
-                }
-            }
-            else
-            {
-                // Simple truncation for plain text
-                truncated = snippet.Substring(0, maxLength);
-
-                // Try to end at a word boundary
-                var lastSpace = truncated.LastIndexOf(' ');
-                if (lastSpace > maxLength * 0.8) // Only use word boundary if it's not too far back
-                {
-                    truncated = truncated.Substring(0, lastSpace);
-                }
-            }
-
-            // Add ellipsis if we actually truncated
-            return truncated.Length < snippet.Length ? truncated + "..." : truncated;
-        }
-
         #endregion Helper Methods for Enhanced Search
-
-        // Helper classes
-        private class QueryAnalysis
-        {
-            public string Query { get; set; }
-            public QueryType queryType { get; set; }
-            public float confidence { get; set; }
-        }
-
-        private enum QueryType
-        {
-            ExactSearch,  // Looking for specific IDs, codes, GUIDs
-            Natural,      // Natural language questions
-            Hybrid        // Mix or uncertain
-        }
-
-        private class HybridSearchResult
-        {
-            public string FilePath { get; set; }
-            public float KeywordScore { get; set; }
-            public float SemanticScore { get; set; }
-            public List<string> RelevantChunks { get; set; } = new List<string>();
-            public string DocumentType { get; set; }
-        }
     }
 }
