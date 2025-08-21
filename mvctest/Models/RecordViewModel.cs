@@ -15,6 +15,13 @@ namespace mvctest.Models
         public Dictionary<string,long>? ContainerCount { get; set; }
         public long? Totalrecords { get; set; }
 
+        // New search filter properties
+        public string? Region { get; set; }
+        public string? Country { get; set; }
+        public string? BillTo { get; set; }
+        public string? ShipTo { get; set; }
+        public string? ClientId { get; set; }
+
         public dynamic ACL { get; set; }
         public string? DownloadLink { get; set; }    // Esource
         public List<ContainerRecordsInfo> containerRecordsInfo { get; set; }

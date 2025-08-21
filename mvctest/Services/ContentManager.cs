@@ -4,6 +4,7 @@ using mvctest.Models;
 using System.Data;
 using System.Globalization;
 using System.Text;
+using System.Threading;
 using TRIM.SDK;
 using static mvctest.Models.ChatBot;
 using Path = System.IO.Path;
@@ -23,14 +24,14 @@ namespace mvctest.Services
         private readonly ILuceneInterface _luceneInterface;
         private string _storedDatasetId;
         private string _storedWorkgroupUrl;
+        private static readonly object _databaseLock = new object();
         public ContentManager(IHttpContextAccessor httpContextAccessor, ContentManagerContext dbContext, IOptions<AppSettings> options, ICachedCount cachedCount, ILuceneInterface luceneInterface)
         {
             _httpContextAccessor = httpContextAccessor;
             _dbContext = dbContext;
             _settings = options.Value;
             _luceneInterface = luceneInterface;
-            EnsureConnected();
-
+            // Note: Don't call EnsureConnected() here as there's no session context during DI registration
         }
         public void ConnectDataBase(string dataSetId, string workGroupServerUrl)
         {
@@ -71,20 +72,59 @@ namespace mvctest.Services
 
         public void EnsureConnected()
         {
-            if (database != null) return;
+            if (database != null && database.IsConnected) 
+            {
+                return;
+            }
 
-            var datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
-            var workgroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl");
+            var datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId") ?? _storedDatasetId;
+            var workgroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl") ?? _storedWorkgroupUrl;
 
             if (!string.IsNullOrEmpty(datasetId) && !string.IsNullOrEmpty(workgroupUrl))
             {
-                database = new Database()
+                try
+                {
+                    database = new Database()
+                    {
+                        Id = datasetId,
+                        WorkgroupServerURL = workgroupUrl
+                    };
+                    database.Connect();
+                    
+                    Console.WriteLine($"✅ Database connected successfully for thread {Thread.CurrentThread.ManagedThreadId}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"❌ Failed to connect to database: {ex.Message}");
+                    throw;
+                }
+            }
+            else
+            {
+                // Don't throw during startup - just log the issue
+                Console.WriteLine("⚠️ Database connection details not available. Connection will be established when credentials are provided.");
+            }
+        }
+
+        private Database CreateThreadSafeDatabase()
+        {
+            var datasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId") ?? _storedDatasetId;
+            var workgroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl") ?? _storedWorkgroupUrl;
+
+            if (!string.IsNullOrEmpty(datasetId) && !string.IsNullOrEmpty(workgroupUrl))
+            {
+                var threadDatabase = new Database()
                 {
                     Id = datasetId,
                     WorkgroupServerURL = workgroupUrl
                 };
-                database.Connect();
+                threadDatabase.Connect();
+                
+                Console.WriteLine($"✅ Created new database connection for thread {Thread.CurrentThread.ManagedThreadId}");
+                return threadDatabase;
             }
+            
+            throw new InvalidOperationException("Database connection details not available. Please ensure you are logged in.");
         }
 
 
@@ -151,23 +191,20 @@ namespace mvctest.Services
         }
         public PaginatedResult<RecordViewModel> GetPaginatedRecords(string searchString, int page, int pageSize)
         {
-            // For wildcard searches, use estimated count or skip total count entirely
-            int totalRecords = 0;
-            bool useEstimatedCount = (searchString == "*" || string.IsNullOrWhiteSpace(searchString));
-
-            if (useEstimatedCount)
+            Database searchDatabase = null;
+            try
             {
-                // Option 1: Use a reasonable estimate (update this value periodically)
-                totalRecords = GetEstimatedTotalRecords();
-            }
-            else
-            {
-                // For specific searches, get accurate count (should be much smaller dataset)
-                totalRecords = _cachedCount.GetTotalRecordCountCached(searchString,database);
-            }
+                Console.WriteLine($"🔍 Starting paginated search with query '{searchString}', page {page}, size {pageSize} on thread {Thread.CurrentThread.ManagedThreadId}");
 
-            // Get paginated results using TRIM SDK pagination
-            TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
+                // Create a new database connection for this thread to avoid threading issues
+                searchDatabase = CreateThreadSafeDatabase();
+
+                // For wildcard searches, use estimated count or skip total count entirely
+                long totalRecords = 0;
+                bool useEstimatedCount = (searchString == "*" || string.IsNullOrWhiteSpace(searchString));
+
+                // Get paginated results using TRIM SDK pagination
+                TrimMainObjectSearch search = new TrimMainObjectSearch(searchDatabase, BaseObjectTypes.Record);
 
             if (useEstimatedCount)
             {
@@ -181,6 +218,9 @@ namespace mvctest.Services
             search.SetSortString("DateCreated");
 
             var listOfRecords = new List<RecordViewModel>();
+            
+            // Get actual count from search after it's configured
+            totalRecords = search.Count;
             var containerRecordsInfoList = new List<ContainerRecordsInfo>();
             var processedContainerIds = new HashSet<long>();
 
@@ -224,17 +264,39 @@ namespace mvctest.Services
                 listOfRecords[0].Totalrecords = totalRecords;
             }
 
-            return new PaginatedResult<RecordViewModel>
+                return new PaginatedResult<RecordViewModel>
+                {
+                    Records = listOfRecords,
+                    TotalRecords = totalRecords
+                };
+            }
+            catch (Exception ex)
             {
-                Records = listOfRecords,
-                TotalRecords = totalRecords
-            };
+                Console.WriteLine($"❌ Error in GetPaginatedRecords: {ex.Message}");
+                throw new Exception($"Failed to execute paginated search: {ex.Message}", ex);
+            }
+            finally
+            {
+                // Clean up the thread-specific database connection
+                if (searchDatabase != null)
+                {
+                    try
+                    {
+                        searchDatabase.Disconnect();
+                        searchDatabase.Dispose();
+                        Console.WriteLine($"🧹 Cleaned up database connection for thread {Thread.CurrentThread.ManagedThreadId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error cleaning up database: {ex.Message}");
+                    }
+                }
+            }
         }
 
         private int GetEstimatedTotalRecords()
         {
-          
-            return _settings.EstimatedRecordCount != null
+            return _settings.EstimatedRecordCount > 0
                 ? _settings.EstimatedRecordCount
                 : 25000; // Default estimate
         }
@@ -376,18 +438,49 @@ namespace mvctest.Services
  
         public Record GetRecordByTitle(string title)
         {
-            TrimMainObjectSearch search = new TrimMainObjectSearch(database, BaseObjectTypes.Record);
-            search.SetSearchString($"typedTitle:{title}");
-
-            foreach (Record record in search)
+            Database searchDatabase = null;
+            try
             {
-                if (record.Title.Equals(title, StringComparison.OrdinalIgnoreCase))
+                Console.WriteLine($"🔍 Searching for record by title: '{title}' on thread {Thread.CurrentThread.ManagedThreadId}");
+
+                // Create a new database connection for this thread
+                searchDatabase = CreateThreadSafeDatabase();
+
+                TrimMainObjectSearch search = new TrimMainObjectSearch(searchDatabase, BaseObjectTypes.Record);
+                search.SetSearchString($"typedTitle:{title}");
+
+                foreach (Record record in search)
                 {
-                    return record;
+                    if (record.Title.Equals(title, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return record;
+                    }
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error in GetRecordByTitle: {ex.Message}");
+                throw new Exception($"Failed to search for record by title: {ex.Message}", ex);
+            }
+            finally
+            {
+                // Clean up the thread-specific database connection
+                if (searchDatabase != null)
+                {
+                    try
+                    {
+                        searchDatabase.Disconnect();
+                        searchDatabase.Dispose();
+                        Console.WriteLine($"🧹 Cleaned up database connection for GetRecordByTitle on thread {Thread.CurrentThread.ManagedThreadId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error cleaning up database: {ex.Message}");
+                    }
                 }
             }
-
-            return null;
         }
 
         public RecordViewModel GetRecordwithURI(int number)
@@ -845,30 +938,30 @@ namespace mvctest.Services
                 var currentUserName = database.CurrentUser.Name;
 
                 // ✅ Check if record already exists for this user, dataset, and workgroup
-                bool exists = _dbContext.UserAccessLog.Any(x =>
-                    x.UserName == currentUserName &&
-                    x.DataSetId == DatasetId &&
-                    x.WorkGroupServer == WorkGroupURL
-                );
+                //bool exists = _dbContext.UserAccessLog.Any(x =>
+                //    x.UserName == currentUserName &&
+                //    x.DataSetId == DatasetId &&
+                //    x.WorkGroupServer == WorkGroupURL
+                //);
 
-                if (exists)
-                {
-                    return true; //  User already logged
-                }
+                //if (exists)
+                //{
+                //    return true; //  User already logged
+                //}
 
-                // ✅ Add only if not exists
-                var useraccess = new UserAccessLog
-                {
-                    UserName = currentUserName,
-                    DataSetId = DatasetId,
-                    WorkGroupServer = WorkGroupURL,
-                    CreatedDate = DateTime.Now,
-                    IPAddress = ipAddress ?? "Unknown",
-                    AppUniqueID = Guid.NewGuid().ToString(),
-                };
+                //// ✅ Add only if not exists
+                //var useraccess = new UserAccessLog
+                //{
+                //    UserName = currentUserName,
+                //    DataSetId = DatasetId,
+                //    WorkGroupServer = WorkGroupURL,
+                //    CreatedDate = DateTime.Now,
+                //    IPAddress = ipAddress ?? "Unknown",
+                //    AppUniqueID = Guid.NewGuid().ToString(),
+                //};
 
-                _dbContext.UserAccessLog.Add(useraccess);
-                _dbContext.SaveChanges();
+                //_dbContext.UserAccessLog.Add(useraccess);
+                //_dbContext.SaveChanges();
 
                 return true;
             }
@@ -932,5 +1025,294 @@ namespace mvctest.Services
             searchClause.SetCriteriaFromString($"\"{searchString.Replace(",", "\\,").Replace("\"", "\\\"")}\"");
             return searchClause;
         }
+
+        public PaginatedRecordViewModel GetRecordsWithPaganited(List<Dictionary<string, string>> searchFilters, int page, int pageSize)
+        {
+            Database searchDatabase = null;
+            try
+            {
+                Console.WriteLine($"🔍 Starting advanced search with {searchFilters.Count} filters, page {page}, size {pageSize} on thread {Thread.CurrentThread.ManagedThreadId}");
+
+                // Create a new database connection for this thread to avoid threading issues
+                searchDatabase = CreateThreadSafeDatabase();
+
+                // Build search using TRIM SDK with thread-safe database
+                TrimMainObjectSearch search = new TrimMainObjectSearch(searchDatabase, BaseObjectTypes.Record);
+                
+                // Sequential filtering approach - filter step by step
+                var filters = new List<(string field, string value)>();
+                
+                foreach (var filter in searchFilters)
+                {
+                    foreach (var kvp in filter)
+                    {
+                        var field = kvp.Key;
+                        var value = kvp.Value;
+                        
+                        if (!string.IsNullOrEmpty(value))
+                        {
+                            filters.Add((field, value));
+                            Console.WriteLine($"✓ Added filter: {field} = {value}");
+                        }
+                    }
+                }
+
+                if (filters.Count == 0)
+                {
+                    Console.WriteLine("❌ No valid filters found");
+                    return new PaginatedRecordViewModel
+                    {
+                        Records = new List<RecordViewModel>(),
+                        CurrentPage = page,
+                        PageSize = pageSize,
+                        TotalRecords = 0
+                    };
+                }
+
+                // Apply filters sequentially using multiple searches
+                var filteredRecords = ApplySequentialFilters(searchDatabase, filters);
+
+                if (!filteredRecords.Any())
+                {
+                    Console.WriteLine("❌ No records found after applying filters");
+                    return new PaginatedRecordViewModel
+                    {
+                        Records = new List<RecordViewModel>(),
+                        CurrentPage = page,
+                        PageSize = pageSize,
+                        TotalRecords = 0
+                    };
+                }
+
+                Console.WriteLine($"✅ Found {filteredRecords.Count} records after filtering");
+
+                // Process all filtered records (no pagination)
+                var totalRecords = filteredRecords.Count;
+                var listOfRecords = new List<RecordViewModel>();
+                var containerRecordsInfoList = new List<ContainerRecordsInfo>();
+                var processedContainerIds = new HashSet<long>();
+
+                Console.WriteLine($"📊 Total records found: {totalRecords}");
+                Console.WriteLine($"📄 Processing all {totalRecords} records");
+
+                // Process all filtered records
+                foreach (Record record in filteredRecords)
+                {
+                    var viewModel = new RecordViewModel
+                    {
+                        URI = record.Uri.Value,
+                        Title = record.Title,
+                        Container = record.Container?.Title ?? "",
+                        AllParts = record.AllParts ?? "",
+                        Assignee = record.Assignee?.Name ?? "",
+                        DateCreated = record.DateCreated.ToShortDateString(),
+                        DownloadLink = "", // Will be populated if needed
+                        
+                        // Additional fields for search filters (with safe retrieval)
+                        Region = GetSafeFieldValue(record, searchDatabase, "Region"),
+                        Country = GetSafeFieldValue(record, searchDatabase, "Country"),
+                        BillTo = GetSafeFieldValue(record, searchDatabase, "BillTo"),
+                        ShipTo = GetSafeFieldValue(record, searchDatabase, "ShipTo"),
+                        ClientId = GetSafeFieldValue(record, searchDatabase, "ClientId")
+                    };
+
+                    listOfRecords.Add(viewModel);
+                }
+
+                Console.WriteLine($"✅ Successfully retrieved {listOfRecords.Count} records (all records)");
+
+                return new PaginatedRecordViewModel
+                {
+                    Records = listOfRecords,
+                    CurrentPage = 1,
+                    PageSize = totalRecords,
+                    TotalRecords = totalRecords
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error in GetRecordsWithPaganited: {ex.Message}");
+                throw new Exception($"Failed to execute search: {ex.Message}", ex);
+            }
+            finally
+            {
+                // Clean up the thread-specific database connection
+                if (searchDatabase != null)
+                {
+                    try
+                    {
+                        searchDatabase.Disconnect();
+                        searchDatabase.Dispose();
+                        Console.WriteLine($"🧹 Cleaned up database connection for thread {Thread.CurrentThread.ManagedThreadId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error cleaning up database: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        private List<Record> ApplySequentialFilters(Database searchDatabase, List<(string field, string value)> filters)
+        {
+            try
+            {
+                Console.WriteLine($"🔄 Building combined search query with {filters.Count} filters...");
+                
+                var searchTerms = new List<string>();
+                
+                foreach (var (field, value) in filters)
+                {
+                    Console.WriteLine($"📝 Adding filter: {field} = {value}");
+                    
+                    switch (field)
+                    {
+                        case "CreatedDate":
+                            if (DateTime.TryParse(value, out DateTime dateValue))
+                            {
+                                searchTerms.Add($"createdOn:{dateValue.Date:MM/dd/yyyy}");
+                            }
+                            break;
+                            
+                        case "Region":
+                            searchTerms.Add($"region:\"{value}\"");
+                            break;
+                            
+                        case "Country":
+                            searchTerms.Add($"country:\"{value}\"");
+                            break;
+                            
+                        case "BillTo":
+                            searchTerms.Add($"billTo:\"{value}\"");
+                            break;
+                            
+                        case "ShipTo":
+                            searchTerms.Add($"shipTo:\"{value}\"");
+                            break;
+                            
+                        case "ClientId":
+                            searchTerms.Add($"clientId:\"{value}\"");
+                            break;
+                            
+                        default:
+                            Console.WriteLine($"⚠️ Unknown field: {field}");
+                            break;
+                    }
+                }
+                
+                if (!searchTerms.Any())
+                {
+                    Console.WriteLine("❌ No valid search terms generated");
+                    return new List<Record>();
+                }
+                
+                // Build combined query with "and" operators
+                var combinedQuery = string.Join(" and ", searchTerms);
+                Console.WriteLine($"🔍 Combined search query: {combinedQuery}");
+                
+                var records = new List<Record>();
+                var search = new TrimMainObjectSearch(searchDatabase, BaseObjectTypes.Record);
+                search.SetSearchString(combinedQuery);
+                
+                foreach (Record record in search)
+                {
+                    records.Add(record);
+                }
+                
+                Console.WriteLine($"✅ Found {records.Count} records with combined query");
+                return records;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error in combined filtering: {ex.Message}");
+                return new List<Record>();
+            }
+        }
+        
+        private List<Record> GetRecordsByField(Database searchDatabase, string field, string value)
+        {
+            try
+            {
+                Console.WriteLine($"🔍 Getting records by {field} = {value}");
+                
+                var records = new List<Record>();
+                var search = new TrimMainObjectSearch(searchDatabase, BaseObjectTypes.Record);
+                
+                switch (field)
+                {
+                    case "CreatedDate":
+                        if (DateTime.TryParse(value, out DateTime dateValue))
+                        {
+                            Console.WriteLine($"createdOn:{dateValue.Date:MM/dd/yyyy}");
+                            search.SetSearchString($"createdOn:{dateValue.Date:MM/dd/yyyy}"); //createdOn:08/04/2025
+                        }
+                        break;
+                        
+                    case "URI":
+                        if (long.TryParse(value, out long uriValue))
+                        {
+                            search.SetSearchString($"uri:{uriValue}");
+                        }
+                        break;
+                        
+                    case "Title":
+                        search.SetSearchString($"title:\"{value}\"");
+                        break;
+                        
+                    case "Container":
+                        search.SetSearchString($"container:\"{value}\"");
+                        break;
+                        
+                    case "RecordNumber":
+                        search.SetSearchString($"number:{value}");
+                        break;
+                        
+                    case "Assignee":
+                        search.SetSearchString($"assignee:\"{value}\"");
+                        break;
+                        
+                    case "AllParts":
+                        search.SetSearchString($"allParts:\"{value}\"");
+                        break;
+                        
+                    default:
+                        Console.WriteLine($"⚠️ Unknown field: {field}");
+                        return records;
+                }
+                
+                Console.WriteLine($"🔍 Search query: {search}");
+                
+                foreach (Record record in search)
+                {
+                    records.Add(record);
+                }
+                
+                Console.WriteLine($"✓ Found {records.Count} records for {field} = {value}");
+                return records;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error getting records by field {field}: {ex.Message}");
+                return new List<Record>();
+            }
+        }
+
+        // Helper method to safely retrieve field values with proper exception handling
+        private string GetSafeFieldValue(Record record, Database searchDatabase, string fieldName)
+        {
+            try
+            {
+                var fieldValue = record.GetFieldValue(new FieldDefinition(searchDatabase, fieldName));
+                return fieldValue?.ToString() ?? "";
+            }
+            catch (Exception ex)
+            {
+                // Log the error and return empty string for missing or invalid fields
+                Console.WriteLine($"⚠️ Unable to retrieve field '{fieldName}': {ex.Message}");
+                return "";
+            }
+        }
+        
+     
     }
 }

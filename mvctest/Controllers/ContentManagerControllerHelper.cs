@@ -255,7 +255,7 @@ namespace mvctest.Controllers
 
                 var requestBody = new
                 {
-                    model = "gemma:7b",
+                    model = "qwen2.5:7b",
                     prompt = prompt,
                     stream = false
                 };

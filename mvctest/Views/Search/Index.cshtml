@@ -1,0 +1,364 @@
+@{
+    ViewData["Title"] = "Advanced Search";
+}
+
+<div class="container-fluid py-3">
+    <!-- Compact Search Header -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <h4 class="fw-bold text-primary mb-2">
+                <i class="fas fa-search me-2"></i>Advanced Search
+            </h4>
+            
+            @if (TempData["ErrorMessage"] != null)
+            {
+                <div class="alert alert-danger alert-dismissible">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    @TempData["ErrorMessage"]
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Compact Search Form -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body py-3">
+                    <form id="searchForm" method="post">
+                        <div class="row g-2">
+                            <!-- Created Date -->
+                            <div class="col-md-2">
+                                <label for="createdDate" class="form-label small fw-semibold">
+                                    <i class="fas fa-calendar me-1"></i>Created Date
+                                </label>
+                                <input type="date" class="form-control form-control-sm" id="createdDate" name="createdDate">
+                            </div>
+
+                            <!-- Region -->
+                            <div class="col-md-2">
+                                <label for="region" class="form-label small fw-semibold">
+                                    <i class="fas fa-globe me-1"></i>Region
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="region" name="region" 
+                                       placeholder="Enter region">
+                            </div>
+
+                            <!-- Country -->
+                            <div class="col-md-2">
+                                <label for="country" class="form-label small fw-semibold">
+                                    <i class="fas fa-flag me-1"></i>Country
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="country" name="country" 
+                                       placeholder="Enter country">
+                            </div>
+
+                            <!-- Bill To -->
+                            <div class="col-md-2">
+                                <label for="billTo" class="form-label small fw-semibold">
+                                    <i class="fas fa-receipt me-1"></i>Bill To
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="billTo" name="billTo" 
+                                       placeholder="Enter billing info">
+                            </div>
+
+                            <!-- Ship To -->
+                            <div class="col-md-2">
+                                <label for="shipTo" class="form-label small fw-semibold">
+                                    <i class="fas fa-shipping-fast me-1"></i>Ship To
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="shipTo" name="shipTo" 
+                                       placeholder="Enter shipping info">
+                            </div>
+
+                            <!-- Client ID -->
+                            <div class="col-md-2">
+                                <label for="clientId" class="form-label small fw-semibold">
+                                    <i class="fas fa-id-card me-1"></i>Client ID
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="clientId" name="clientId" 
+                                       placeholder="Enter client ID">
+                            </div>
+                        </div>
+
+                        <!-- Compact Search Buttons -->
+                        <div class="row mt-3">
+                            <div class="col-12 text-center">
+                                <button type="submit" class="btn btn-primary btn-sm me-2">
+                                    <i class="fas fa-search me-1"></i>Search
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="clearForm">
+                                    <i class="fas fa-eraser me-1"></i>Clear
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Container -->
+    <div class="row">
+        <div class="col-12">
+            <div id="searchResults" style="display: none;">
+                <!-- Results will be loaded here via AJAX -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .card {
+        border: none;
+        border-radius: 8px;
+    }
+
+    .form-label.small {
+        font-weight: 600;
+        color: #495057;
+        margin-bottom: 0.25rem;
+        font-size: 0.85rem;
+    }
+
+    .form-control-sm {
+        border: 1px solid #e9ecef;
+        border-radius: 6px;
+        padding: 0.4rem 0.6rem;
+        transition: all 0.2s ease;
+        font-size: 0.875rem;
+    }
+
+    .form-control-sm:focus {
+        border-color: #007bff;
+        box-shadow: 0 0 0 0.1rem rgba(0, 123, 255, 0.15);
+    }
+
+    .btn-sm {
+        padding: 0.4rem 1rem;
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 0.875rem;
+    }
+
+    .btn-primary {
+        background: #007bff;
+        border: none;
+        transition: all 0.2s ease;
+    }
+
+    .btn-primary:hover {
+        background: #0056b3;
+        transform: translateY(-1px);
+    }
+
+    .btn-outline-secondary {
+        border: 1px solid #6c757d;
+        color: #6c757d;
+        transition: all 0.2s ease;
+    }
+
+    .btn-outline-secondary:hover {
+        background-color: #6c757d;
+        border-color: #6c757d;
+        color: white;
+    }
+
+    .alert {
+        border-radius: 6px;
+        border: none;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .shadow-sm {
+        box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075) !important;
+    }
+
+    #searchResults {
+        animation: fadeIn 0.3s ease-in;
+    }
+
+    @@keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .results-header {
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 6px 6px 0 0;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #dee2e6;
+    }
+</style>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script>
+$(document).ready(function() {
+    // Handle form submission
+    $('#searchForm').on('submit', function(e) {
+        e.preventDefault();
+        
+        // Collect form data
+        const searchFilters = [];
+        
+        // Get all form values and create filter objects
+        const createdDate = $('#createdDate').val();
+        if (createdDate) {
+            // Convert YYYY-MM-DD to MM/DD/YYYY for the backend
+            const date = new Date(createdDate);
+            const formattedDate = (date.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                                date.getDate().toString().padStart(2, '0') + '/' + 
+                                date.getFullYear();
+            searchFilters.push({ 'CreatedDate': formattedDate });
+        }
+        
+        const region = $('#region').val().trim();
+        if (region) searchFilters.push({ 'Region': region });
+        
+        const country = $('#country').val().trim();
+        if (country) searchFilters.push({ 'Country': country });
+        
+        const billTo = $('#billTo').val().trim();
+        if (billTo) searchFilters.push({ 'BillTo': billTo });
+        
+        const shipTo = $('#shipTo').val().trim();
+        if (shipTo) searchFilters.push({ 'ShipTo': shipTo });
+        
+        const clientId = $('#clientId').val().trim();
+        if (clientId) searchFilters.push({ 'ClientId': clientId });
+        
+        // Validate that at least one filter is provided
+        if (searchFilters.length === 0) {
+            alert('Please enter at least one search criterion.');
+            return;
+        }
+        
+        // Show loading state
+        const submitBtn = $(this).find('button[type="submit"]');
+        const originalText = submitBtn.html();
+        submitBtn.html('<i class="fas fa-spinner fa-spin me-2"></i>Searching...').prop('disabled', true);
+        
+        // Make AJAX request to search endpoint
+        $.ajax({
+            url: '@Url.Action("GetResults", "Search")',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(searchFilters),
+            success: function(response) {
+                if (response.success) {
+                    // Show results in the same page
+                    $('#searchResults').html(response.html).show();
+                    
+                    // Scroll to results
+                    $('html, body').animate({
+                        scrollTop: $('#searchResults').offset().top - 20
+                    }, 300);
+                } else {
+                    $('#searchResults').html(`
+                        <div class="alert alert-warning">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            ${response.message || 'No results found'}
+                        </div>
+                    `).show();
+                }
+                
+                // Restore button
+                submitBtn.html(originalText).prop('disabled', false);
+            },
+            error: function(xhr, status, error) {
+                console.error('Search error:', error);
+                let errorMessage = 'An unexpected error occurred while searching.';
+                
+                if (xhr.responseText) {
+                    try {
+                        const errorResponse = JSON.parse(xhr.responseText);
+                        if (errorResponse.message) {
+                            errorMessage = errorResponse.message;
+                        }
+                    } catch (e) {
+                        // If it's not JSON, try to extract error from HTML
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(xhr.responseText, 'text/html');
+                        const errorElement = doc.querySelector('.alert-danger, .error-message');
+                        if (errorElement) {
+                            errorMessage = errorElement.textContent.trim();
+                        }
+                    }
+                }
+                
+                $('#searchResults').html(`
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        <strong>Search Failed:</strong> ${errorMessage}
+                    </div>
+                `).show();
+                
+                // Restore button
+                submitBtn.html(originalText).prop('disabled', false);
+            }
+        });
+    });
+    
+    // Clear form
+    $('#clearForm').on('click', function() {
+        $('#searchForm')[0].reset();
+    });
+    
+    // Auto-format date inputs
+    $('input[type="date"]').on('change', function() {
+        const date = $(this).val();
+        if (date) {
+            // Optional: Add validation or formatting logic here
+            console.log('Date selected:', date);
+        }
+    });
+
+    // Global function for pagination (called from partial view)
+    window.loadPage = function(page) {
+        // Get current search filters from the form
+        const searchFilters = [];
+        
+        const createdDate = $('#createdDate').val();
+        if (createdDate) {
+            const date = new Date(createdDate);
+            const formattedDate = (date.getMonth() + 1).toString().padStart(2, '0') + '/' + 
+                                date.getDate().toString().padStart(2, '0') + '/' + 
+                                date.getFullYear();
+            searchFilters.push({ 'CreatedDate': formattedDate });
+        }
+        
+        const region = $('#region').val().trim();
+        if (region) searchFilters.push({ 'Region': region });
+        
+        const country = $('#country').val().trim();
+        if (country) searchFilters.push({ 'Country': country });
+        
+        const billTo = $('#billTo').val().trim();
+        if (billTo) searchFilters.push({ 'BillTo': billTo });
+        
+        const shipTo = $('#shipTo').val().trim();
+        if (shipTo) searchFilters.push({ 'ShipTo': shipTo });
+        
+        const clientId = $('#clientId').val().trim();
+        if (clientId) searchFilters.push({ 'ClientId': clientId });
+        
+        // Make AJAX request for the specific page
+        $.ajax({
+            url: '@Url.Action("GetResults", "Search")',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(searchFilters),
+            success: function(response) {
+                if (response.success) {
+                    $('#searchResults').html(response.html);
+                }
+            },
+            error: function() {
+                console.error('Failed to load page ' + page);
+            }
+        });
+    };
+});
+</script>

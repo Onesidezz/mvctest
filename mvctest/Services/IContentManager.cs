@@ -19,6 +19,7 @@ namespace mvctest.Services
         void GenerateChatTrainingDataCsv(List<RecordViewModel> records, string filePath);
         void AppendAdvancedChatTrainingData(List<RecordViewModel> records, string filePath);
         bool CreateRecord(CreateRecord recors);
+        PaginatedRecordViewModel GetRecordsWithPaganited(List<Dictionary<string, string>> search, int page, int pageSize);
    
 
 

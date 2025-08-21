@@ -29,6 +29,12 @@ builder.Services.AddSingleton<ILuceneInterface, LuceneServices>();
 // Register the high-resolution text analyzer
 builder.Services.AddSingleton<HighResolutionTextAnalyzer>();
 
+// Register search session management service
+builder.Services.AddScoped<ISessionSearchManager, SessionSearchManager>();
+
+// Register background search cleanup service
+builder.Services.AddHostedService<SearchCleanupService>();
+
 // Two-phase search removed as it was not working properly
 
 

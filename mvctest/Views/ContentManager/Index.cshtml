@@ -249,8 +249,8 @@
 
                     <!-- Page Numbers with Smart Display -->
                     @{
-                        int startPage = Math.Max(1, Model.CurrentPage - 2);
-                        int endPage = Math.Min(Model.TotalPages, Model.CurrentPage + 2);
+                        long startPage = Math.Max(1, Model.CurrentPage - 2);
+                        long endPage = Math.Min(Model.TotalPages, Model.CurrentPage + 2);
                         
                         // Adjust to always show 5 pages when possible
                         if (endPage - startPage < 4)
@@ -281,7 +281,7 @@
                     }
 
                     <!-- Display page numbers -->
-                    @for (int i = startPage; i <= endPage; i++)
+                    @for (long i = startPage; i <= endPage; i++)
                     {
                         <li class="page-item @(Model.CurrentPage == i ? "active" : "")">
                             @if (Model.CurrentPage == i)

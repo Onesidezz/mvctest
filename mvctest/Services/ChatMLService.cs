@@ -260,14 +260,14 @@ namespace mvctest.Services
             // Optimized request body with faster model
             var requestBody = new
             {
-                model = "deepseek-r1:1.5b", 
+                model = "qwen2.5:7b",
                 prompt = $"{prompt}\n\n{fileContent}",
                 stream = true,
                 options = new
                 {
-                    temperature = 0.3, // Lower temperature for more focused responses
+                    temperature = 0.3, 
                     top_p = 0.9,
-                    num_ctx = 4096 // Limit context window for faster processing
+                    num_ctx = 4096 
                 }
             };
 

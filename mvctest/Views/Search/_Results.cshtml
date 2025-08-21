@@ -1,0 +1,523 @@
+@model mvctest.Models.PaginatedRecordViewModel
+
+<div class="card border-0 shadow-sm">
+    <div class="results-header">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h6 class="mb-1 fw-bold">
+                    <i class="fas fa-list-ul me-2"></i>
+                    Search Results
+                </h6>
+                @if (ViewBag.SearchFiltersJson != null)
+                {
+                    <small class="text-muted">Applied Filters: @BuildSearchDescription(ViewBag.SearchFiltersJson.ToString())</small>
+                }
+            </div>
+            <div>
+                @if (Model?.TotalRecords > 0)
+                {
+                    <span class="badge bg-success">@Model.TotalRecords.ToString("N0") records found</span>
+                    @if (Model.TotalPages > 1)
+                    {
+                        <span class="badge bg-primary ms-2">Page @Model.CurrentPage of @Model.TotalPages</span>
+                    }
+                }
+                else
+                {
+                    <span class="badge bg-warning text-dark">No results</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="card-body p-0">
+        <!-- Selected Records Count -->
+        <div class="selected-count"></div>
+
+        @if (Model?.Records != null && Model.Records.Any())
+        {
+            <!-- Hierarchical Container View -->
+            <div class="container-tree">
+                @{
+                    // Group records by container - only show containers that have records
+                    var groupedByContainer = Model.Records
+                        .Where(r => !string.IsNullOrEmpty(r.Container))
+                        .GroupBy(r => r.Container)
+                        .Where(g => g.Any())
+                        .ToList();
+                }
+                
+                @foreach (var containerGroup in groupedByContainer)
+                {
+                    var containerId = containerGroup.Key.Replace(" ", "_").Replace("/", "_");
+                    var recordCount = containerGroup.Count();
+                    
+                    <!-- Container Header -->
+                    <div class="container-header" data-container="@containerGroup.Key">
+                        <div class="d-flex align-items-center py-2 px-3 border-bottom bg-light">
+                            <input type="checkbox" class="form-check-input container-checkbox me-3" 
+                                   id="container_@containerId" 
+                                   data-container="@containerGroup.Key"
+                                   title="Select all records in this container">
+                            
+                            <button class="btn btn-sm btn-link p-0 me-2 collapse-toggle" 
+                                    type="button" 
+                                    data-bs-toggle="collapse" 
+                                    data-bs-target="#collapse_@containerId"
+                                    aria-expanded="true">
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
+                            
+                            <i class="fas fa-folder me-2 text-primary"></i>
+                            <span class="fw-semibold">@containerGroup.Key</span>
+                            <span class="badge bg-secondary ms-2">@recordCount records</span>
+                        </div>
+                        
+                        <!-- Container Records -->
+                        <div class="collapse show" id="collapse_@containerId">
+                            <div class="table-responsive">
+                                <table class="table table-hover table-sm mb-0 container-table">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 5%;"></th>
+                                            <th style="width: 12%; min-width: 100px;">Client ID</th>
+                                            <th style="width: 25%; min-width: 180px;">Title</th>
+                                            <th style="width: 12%; min-width: 80px;">Country</th>
+                                            <th style="width: 12%; min-width: 80px;">Region</th>
+                                            <th style="width: 17%; min-width: 120px;">Bill To</th>
+                                            <th style="width: 17%; min-width: 120px;">Ship To</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var record in containerGroup)
+                                        {
+                                            <tr class="record-row" data-uri="@record.URI" data-container="@containerGroup.Key">
+                                                <td class="text-center">
+                                                    <input type="checkbox" class="form-check-input record-checkbox" 
+                                                           value="@record.URI" 
+                                                           data-client-id="@(record.ClientId ?? "")"
+                                                           data-title="@(record.Title ?? "")"
+                                                           data-container="@containerGroup.Key">
+                                                    <input type="hidden" class="record-uri" value="@record.URI">
+                                                </td>
+                                                <td class="text-nowrap">
+                                                    <span class="fw-semibold">@(record.ClientId ?? "N/A")</span>
+                                                </td>
+                                                <td class="text-wrap">
+                                                    <div class="fw-semibold">@(record.Title ?? "N/A")</div>
+                                                    @if (!string.IsNullOrEmpty(record.AllParts))
+                                                    {
+                                                        <small class="text-muted d-block">@record.AllParts</small>
+                                                    }
+                                                </td>
+                                                <td class="text-nowrap">
+                                                    <span>@(record.Country ?? "N/A")</span>
+                                                </td>
+                                                <td class="text-nowrap">
+                                                    <span>@(record.Region ?? "N/A")</span>
+                                                </td>
+                                                <td class="text-wrap" style="max-width: 120px;">
+                                                    <span title="@(record.BillTo ?? "")">
+                                                        @(record.BillTo ?? "N/A")
+                                                    </span>
+                                                </td>
+                                                <td class="text-wrap" style="max-width: 120px;">
+                                                    <span title="@(record.ShipTo ?? "")">
+                                                        @(record.ShipTo ?? "N/A")
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <!-- No Results -->
+            <div class="text-center py-5">
+                <i class="fas fa-search text-muted mb-3" style="font-size: 3rem; opacity: 0.3;"></i>
+                <h6 class="text-muted">No Results Found</h6>
+                <p class="text-muted mb-0">Try adjusting your search criteria</p>
+            </div>
+        }
+    </div>
+</div>
+
+<style>
+    .table-responsive {
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .table {
+        table-layout: fixed;
+        width: 100%;
+        margin-bottom: 0;
+    }
+
+    .table td, .table th {
+        vertical-align: middle;
+        padding: 0.75rem 0.5rem;
+        border: 1px solid #dee2e6;
+    }
+
+    .table th {
+        font-weight: 600;
+        background-color: #f8f9fa;
+        border-bottom: 2px solid #dee2e6;
+    }
+
+    .text-wrap {
+        white-space: normal;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        line-height: 1.3;
+    }
+
+    .text-nowrap {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .pagination {
+        margin-top: 20px;
+        margin-bottom: 20px;
+    }
+
+    .page-link {
+        color: #007bff;
+        border-color: #dee2e6;
+    }
+
+    .page-item.active .page-link {
+        background-color: #007bff;
+        border-color: #007bff;
+    }
+
+    .page-item.disabled .page-link {
+        color: #6c757d;
+        pointer-events: none;
+        cursor: not-allowed;
+        background-color: #fff;
+        border-color: #dee2e6;
+    }
+
+    /* Ensure proper column spacing */
+    .table td:nth-child(7), 
+    .table td:nth-child(8) {
+        max-width: 120px;
+        min-width: 100px;
+    }
+
+    .table th:nth-child(7), 
+    .table th:nth-child(8) {
+        max-width: 120px;
+        min-width: 100px;
+    }
+
+    /* Checkbox styling */
+    .form-check-input {
+        width: 1.2em;
+        height: 1.2em;
+        cursor: pointer;
+    }
+
+    .record-row:hover {
+        background-color: #f8f9fa;
+    }
+
+    .record-row.selected {
+        background-color: #e3f2fd;
+    }
+
+    /* Container Tree Styling */
+    .container-tree {
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .container-header {
+        border: 1px solid #dee2e6;
+        margin-bottom: 1px;
+    }
+
+    .container-header:last-child {
+        margin-bottom: 0;
+    }
+
+    .collapse-toggle {
+        border: none !important;
+        color: #6c757d;
+        text-decoration: none;
+        transition: transform 0.2s ease;
+    }
+
+    .collapse-toggle:hover {
+        color: #495057;
+    }
+
+    .collapse-toggle[aria-expanded="false"] i {
+        transform: rotate(-90deg);
+    }
+
+    .container-table {
+        border-top: none;
+    }
+
+    .container-table thead th {
+        background-color: #f8f9fa;
+        border-top: 1px solid #dee2e6;
+        font-size: 0.85rem;
+        padding: 0.5rem;
+    }
+
+    .container-table tbody td {
+        padding: 0.6rem 0.5rem;
+        font-size: 0.9rem;
+    }
+
+    .container-checkbox {
+        transform: scale(1.1);
+    }
+
+    .container-header.selected {
+        background-color: #e3f2fd !important;
+    }
+
+    /* Selected records indicator */
+    .selected-count {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: #007bff;
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 0 0 8px 8px;
+        margin-bottom: 1rem;
+        display: none;
+        text-align: center;
+        font-weight: 600;
+    }
+</style>
+
+<script>
+$(document).ready(function() {
+    // Handle "Select All" checkbox (if exists)
+    $('#selectAll').on('change', function() {
+        const isChecked = $(this).prop('checked');
+        $('.record-checkbox, .container-checkbox').prop('checked', isChecked);
+        updateSelectedCount();
+        updateVisualSelection();
+    });
+
+    // Handle container-level checkboxes
+    $(document).on('change', '.container-checkbox', function() {
+        const $containerHeader = $(this).closest('.container-header');
+        const containerName = $(this).data('container');
+        const isChecked = $(this).prop('checked');
+        
+        // Select/deselect all records in this container
+        $containerHeader.find('.record-checkbox').prop('checked', isChecked);
+        
+        // Update visual selection for container and records
+        if (isChecked) {
+            $containerHeader.addClass('selected');
+            $containerHeader.find('.record-row').addClass('selected');
+        } else {
+            $containerHeader.removeClass('selected');
+            $containerHeader.find('.record-row').removeClass('selected');
+        }
+        
+        updateSelectedCount();
+        updateGlobalSelectAllState();
+    });
+
+    // Handle individual record checkboxes
+    $(document).on('change', '.record-checkbox', function() {
+        const $row = $(this).closest('.record-row');
+        const $containerHeader = $(this).closest('.container-header');
+        const containerName = $(this).data('container');
+        
+        if ($(this).prop('checked')) {
+            $row.addClass('selected');
+        } else {
+            $row.removeClass('selected');
+        }
+        
+        // Check if all records in this container are selected
+        const containerRecords = $containerHeader.find('.record-checkbox');
+        const selectedInContainer = $containerHeader.find('.record-checkbox:checked');
+        const containerCheckbox = $containerHeader.find('.container-checkbox');
+        
+        if (selectedInContainer.length === containerRecords.length && containerRecords.length > 0) {
+            containerCheckbox.prop('checked', true);
+            $containerHeader.addClass('selected');
+        } else {
+            containerCheckbox.prop('checked', false);
+            $containerHeader.removeClass('selected');
+        }
+        
+        updateSelectedCount();
+        updateGlobalSelectAllState();
+    });
+
+    // Handle expand/collapse toggle
+    $(document).on('click', '.collapse-toggle', function() {
+        const $icon = $(this).find('i');
+        const target = $(this).attr('data-bs-target');
+        
+        // Toggle icon rotation
+        setTimeout(() => {
+            const isCollapsed = $(target).hasClass('show');
+            if (isCollapsed) {
+                $icon.removeClass('fa-chevron-down').addClass('fa-chevron-right');
+                $(this).attr('aria-expanded', 'false');
+            } else {
+                $icon.removeClass('fa-chevron-right').addClass('fa-chevron-down');
+                $(this).attr('aria-expanded', 'true');
+            }
+        }, 100);
+    });
+
+    // Update global "Select All" checkbox state
+    function updateGlobalSelectAllState() {
+        const totalCheckboxes = $('.record-checkbox').length;
+        const checkedCheckboxes = $('.record-checkbox:checked').length;
+        
+        if (checkedCheckboxes === totalCheckboxes && totalCheckboxes > 0) {
+            $('#selectAll').prop('checked', true);
+        } else {
+            $('#selectAll').prop('checked', false);
+        }
+    }
+
+    // Update visual selection state
+    function updateVisualSelection() {
+        $('.record-checkbox').each(function() {
+            const $row = $(this).closest('.record-row');
+            if ($(this).prop('checked')) {
+                $row.addClass('selected');
+            } else {
+                $row.removeClass('selected');
+            }
+        });
+        
+        $('.container-checkbox').each(function() {
+            const $header = $(this).closest('.container-header');
+            if ($(this).prop('checked')) {
+                $header.addClass('selected');
+            } else {
+                $header.removeClass('selected');
+            }
+        });
+    }
+
+    // Function to update selected count display
+    function updateSelectedCount() {
+        const selectedCount = $('.record-checkbox:checked').length;
+        const selectedContainers = $('.container-checkbox:checked').length;
+        
+        if (selectedCount > 0) {
+            let displayText = `<i class="fas fa-check-circle me-2"></i>${selectedCount} record(s) selected`;
+            if (selectedContainers > 0) {
+                displayText += ` (${selectedContainers} container(s))`;
+            }
+            
+            $('.selected-count').show().html(`
+                ${displayText}
+                <button class="btn btn-sm btn-light ms-3" onclick="getSelectedRecords()">
+                    <i class="fas fa-list me-1"></i>Get Selected
+                </button>
+                <button class="btn btn-sm btn-outline-light ms-2" onclick="clearSelection()">
+                    <i class="fas fa-times me-1"></i>Clear
+                </button>
+            `);
+        } else {
+            $('.selected-count').hide();
+        }
+    }
+
+    // Global function to get selected records
+    window.getSelectedRecords = function() {
+        const selectedRecords = [];
+        $('.record-checkbox:checked').each(function() {
+            const $checkbox = $(this);
+            selectedRecords.push({
+                uri: $checkbox.val(),
+                clientId: $checkbox.data('client-id'),
+                title: $checkbox.data('title'),
+                container: $checkbox.data('container')
+            });
+        });
+        
+        console.log('Selected Records:', selectedRecords);
+        alert(`Selected ${selectedRecords.length} records. Check console for details.`);
+        
+        return selectedRecords;
+    };
+
+    // Global function to clear selection
+    window.clearSelection = function() {
+        $('.record-checkbox, .container-checkbox').prop('checked', false);
+        $('#selectAll').prop('checked', false);
+        $('.record-row, .container-header').removeClass('selected');
+        updateSelectedCount();
+    };
+});
+</script>
+
+@functions {
+    private string BuildSearchDescription(string searchFiltersJson)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(searchFiltersJson))
+                return "No filters applied";
+                
+            var search = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, string>>>(searchFiltersJson);
+            
+            if (search == null || !search.Any())
+                return "No filters applied";
+                
+            var descriptions = new List<string>();
+            
+            foreach (var filter in search)
+            {
+                foreach (var kvp in filter)
+                {
+                    var field = kvp.Key;
+                    var value = kvp.Value;
+                    
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        var fieldDisplay = field switch
+                        {
+                            "CreatedDate" => "Created Date",
+                            "Region" => "Region",
+                            "Country" => "Country",
+                            "BillTo" => "Bill To",
+                            "ShipTo" => "Ship To",
+                            "ClientId" => "Client ID",
+                            _ => field
+                        };
+                        
+                        descriptions.Add($"{fieldDisplay}: {value}");
+                    }
+                }
+            }
+            
+            return descriptions.Any() ? string.Join(", ", descriptions) : "No filters applied";
+        }
+        catch
+        {
+            return "Invalid filter data";
+        }
+    }
+}
