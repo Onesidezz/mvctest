@@ -20,8 +20,8 @@ namespace mvctest.Services
         void AppendAdvancedChatTrainingData(List<RecordViewModel> records, string filePath);
         bool CreateRecord(CreateRecord recors);
         PaginatedRecordViewModel GetRecordsWithPaganited(List<Dictionary<string, string>> search, int page, int pageSize);
-   
-
+        void IndexAllContentManagerRecordsToLucene();
+        void InitializeDatabaseForIndexing(string datasetId, string workgroupUrl);
 
     }
 }

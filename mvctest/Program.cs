@@ -1,6 +1,4 @@
-﻿using Hangfire;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.Distributed;
+﻿using Microsoft.EntityFrameworkCore;
 using mvctest.Context;
 using mvctest.Models;
 using mvctest.Services;
@@ -22,6 +20,7 @@ builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSet
 builder.Services.AddScoped<IContentManager, ContentManager>();
 builder.Services.AddScoped<IChatMLService, ChatMLService>();
 builder.Services.AddScoped<ICachedCount,CachedCount>();
+builder.Services.AddScoped<mvctest.Controllers.ContentManagerHelperService>();
 
 // Register enhanced Lucene services with high-resolution capabilities
 builder.Services.AddSingleton<ILuceneInterface, LuceneServices>();
@@ -57,11 +56,11 @@ builder.Services.AddSession(options =>
 });
 
 // In Program.cs
-builder.Services.AddHangfire(configuration => configuration
-    .SetDataCompatibilityLevel(CompatibilityLevel.Version_170)
-    .UseSimpleAssemblyNameTypeSerializer()
-    .UseRecommendedSerializerSettings()
-    .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
+//builder.Services.AddHangfire(configuration => configuration
+//    .SetDataCompatibilityLevel(CompatibilityLevel.Version_170)
+//    .UseSimpleAssemblyNameTypeSerializer()
+//    .UseRecommendedSerializerSettings()
+//    .UseSqlServerStorage(builder.Configuration.GetConnectionString("DefaultConnection")));
 // ===== 5. Register MVC/Controllers =====
 builder.Services.AddControllersWithViews();
 
@@ -73,8 +72,8 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Home/Error");
     app.UseHsts();
 }
-app.UseHangfireDashboard();
-app.UseHangfireServer();
+//app.UseHangfireDashboard();
+//app.UseHangfireServer();
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();

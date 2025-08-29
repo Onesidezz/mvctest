@@ -49,11 +49,34 @@ namespace mvctest.Services
         }
         public Database CreateNewDatabaseConnection()
         {
+            Console.WriteLine($"🔍 CreateNewDatabaseConnection called:");
+            Console.WriteLine($"   - _storedDatasetId: '{_storedDatasetId}'");
+            Console.WriteLine($"   - _storedWorkgroupUrl: '{_storedWorkgroupUrl}'");
+            
             if (string.IsNullOrEmpty(_storedDatasetId) || string.IsNullOrEmpty(_storedWorkgroupUrl))
             {
-                throw new InvalidOperationException("Database connection details not available");
+                Console.WriteLine("❌ Connection details missing! Checking session...");
+                
+                // Try to get from session as fallback
+                var sessionDatasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
+                var sessionWorkGroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl");
+                
+                Console.WriteLine($"   - Session DatasetId: '{sessionDatasetId}'");
+                Console.WriteLine($"   - Session WorkGroupUrl: '{sessionWorkGroupUrl}'");
+                
+                if (!string.IsNullOrEmpty(sessionDatasetId) && !string.IsNullOrEmpty(sessionWorkGroupUrl))
+                {
+                    Console.WriteLine("✅ Using session values for connection");
+                    _storedDatasetId = sessionDatasetId;
+                    _storedWorkgroupUrl = sessionWorkGroupUrl;
+                }
+                else
+                {
+                    throw new InvalidOperationException("Database connection details not available in instance or session");
+                }
             }
 
+            Console.WriteLine($"✅ Creating database connection with DatasetId: '{_storedDatasetId}'");
             var newDatabase = new Database()
             {
                 Id = _storedDatasetId,
@@ -514,14 +537,29 @@ namespace mvctest.Services
             try
             {
                 var filehandeler = new FileHandaler();
-                Record record = new Record(database, id);
+                
+                // Create a fresh database connection for this operation
+                Database downloadDatabase;
+                if (database != null && database.IsConnected)
+                {
+                    downloadDatabase = database;
+                }
+                else
+                {
+                    Console.WriteLine("Creating new database connection for download...");
+                    downloadDatabase = CreateNewDatabaseConnection();
+                }
+                
+                Record record = new Record(downloadDatabase, id);
                 if (!record.IsElectronic)
                 {
                     Console.WriteLine($"Record with ID {id} does not have an electronic document.");
-                    return null; // Or return filehandeler with empty fields if preferred
+                    return null;
                 }
-                string outputPath = @"C:\Temp\Download\" + record.Title + Path.GetExtension(record.Extension);
-                string fileName = record.Title + Path.GetExtension(record.Extension);
+                string extention = record.Extension;
+                string outputPath = @"C:\Temp\Download\" + record.Title +"."+ record.Extension;
+
+                string fileName = record.Title +"."+ extention;
 
                 string savedPath = record.GetDocument(
                     outputPath,
@@ -529,15 +567,18 @@ namespace mvctest.Services
                     "Downloaded via app",
                     outputPath
                 );
+                
                 var bytesdata = System.IO.File.ReadAllBytes(savedPath);
                 filehandeler.File = bytesdata;
                 filehandeler.FileName = fileName;
                 filehandeler.LocalDownloadPath = outputPath;
+                
+                Console.WriteLine($"Successfully downloaded file: {fileName} ({bytesdata.Length} bytes)");
                 return filehandeler;
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                Console.WriteLine($"Error in Download method for ID {id}: {ex.Message}");
                 throw;
             }
         }
@@ -923,12 +964,20 @@ namespace mvctest.Services
 
         public bool AccessLog(string DatasetId, string WorkGroupURL)
         {
-            if (_isConnected) return true;
+            Console.WriteLine($"🔐 AccessLog called with DatasetId: '{DatasetId}', WorkGroupURL: '{WorkGroupURL}'");
+            
+            if (_isConnected) 
+            {
+                Console.WriteLine("✅ Already connected, returning true");
+                return true;
+            }
 
             try
             {
+                Console.WriteLine("🔗 Calling ConnectDataBase...");
                 ConnectDataBase(DatasetId, WorkGroupURL);
                 _isConnected = true;
+                Console.WriteLine("✅ Database connected successfully");
 
                 // ✅ Store session values
                 _httpContextAccessor.HttpContext?.Session.SetString("DatasetId", DatasetId);
@@ -1195,7 +1244,7 @@ namespace mvctest.Services
                             break;
                             
                         default:
-                            Console.WriteLine($"⚠️ Unknown field: {field}");
+                            searchTerms.Add($"number: {"*"}");
                             break;
                     }
                 }
@@ -1310,6 +1359,173 @@ namespace mvctest.Services
                 // Log the error and return empty string for missing or invalid fields
                 Console.WriteLine($"⚠️ Unable to retrieve field '{fieldName}': {ex.Message}");
                 return "";
+            }
+        }
+
+        // Lucene Indexing Method - Index all ContentManager records to Lucene
+        public void IndexAllContentManagerRecordsToLucene()
+        {
+            Console.WriteLine("🚀 Starting to index all ContentManager records to Lucene...");
+            
+            try
+            {
+                // Ensure database connection is established before proceeding
+                EnsureConnected();
+                
+                // Check if we have connection details
+                if (string.IsNullOrEmpty(_storedDatasetId) || string.IsNullOrEmpty(_storedWorkgroupUrl))
+                {
+                    // Try to get from session if available
+                    var sessionDatasetId = _httpContextAccessor.HttpContext?.Session.GetString("DatasetId");
+                    var sessionWorkGroupUrl = _httpContextAccessor.HttpContext?.Session.GetString("WorkGroupUrl");
+                    
+                    if (!string.IsNullOrEmpty(sessionDatasetId) && !string.IsNullOrEmpty(sessionWorkGroupUrl))
+                    {
+                        _storedDatasetId = sessionDatasetId;
+                        _storedWorkgroupUrl = sessionWorkGroupUrl;
+                        Console.WriteLine("✅ Retrieved connection details from session");
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("❌ Database connection not established. Please login first or ensure TRIM connection is available.");
+                    }
+                }
+                
+                Console.WriteLine($"📊 Using connection - DatasetId: {_storedDatasetId}, WorkgroupUrl: {_storedWorkgroupUrl}");
+                
+                // 1. Get ALL records from ContentManager using wildcard search
+                var wildcardFilters = new List<Dictionary<string, string>>
+                {
+                    new Dictionary<string, string> { { "Title", "*" } }
+                };
+                var allRecords = GetRecordsWithPaganited(wildcardFilters, 1, int.MaxValue);
+                
+                Console.WriteLine($"📊 Found {allRecords.TotalRecords} records to index");
+                
+                int indexed = 0;
+                int failed = 0;
+                
+                // 2. Process each record
+                foreach (var record in allRecords.Records)
+                {
+                    try
+                    {
+                        if (record.URI.HasValue)
+                        {
+                            // 3. Download document content
+                            var fileHandler = Download((int)record.URI.Value);
+                            if (fileHandler?.File != null)
+                            {
+                                // 4. Save to temp file for text extraction
+                                var tempFilePath = Path.Combine(Path.GetTempPath(), fileHandler.FileName);
+                                File.WriteAllBytes(tempFilePath, fileHandler.File);
+                                
+                                // 5. Index this record with TRIM metadata
+                                IndexSingleRecordToLucene(tempFilePath, record, fileHandler.FileName);
+                                
+                                // 6. Cleanup temp file
+                                File.Delete(tempFilePath);
+                                
+                                indexed++;
+                                Console.WriteLine($"✅ Indexed: {record.ClientId} - {record.Title}");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"⚠️ No file content for URI: {record.URI}");
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"⚠️ No URI for record: {record.Title}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        Console.WriteLine($"❌ Failed to index URI {record.URI}: {ex.Message}");
+                    }
+                }
+                
+                // 7. Commit all changes
+                _luceneInterface.CommitIndex();
+                
+                Console.WriteLine($"🎉 Indexing completed! Indexed: {indexed}, Failed: {failed}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"💥 Error in IndexAllContentManagerRecordsToLucene: {ex.Message}");
+                throw;
+            }
+        }
+
+        // Helper method to index single record (similar to existing IndexFile structure)
+        private void IndexSingleRecordToLucene(string tempFilePath, RecordViewModel record, string fileName)
+        {
+            try
+            {
+                Console.WriteLine($"📄 Processing document: {fileName}");
+                
+                // Extract text content using existing method
+                var content = FileTextExtractor.ExtractTextFromFile(tempFilePath);
+                
+                if (string.IsNullOrEmpty(content))
+                {
+                    Console.WriteLine($"No content extracted from: {fileName}");
+                    return;
+                }
+                
+                // Create metadata dictionary for Lucene
+                var metadata = new Dictionary<string, string>
+                {
+                    {"URI", record.URI?.ToString() ?? ""},
+                    {"Title", record.Title ?? ""},
+                    {"Container", record.Container ?? ""},
+                    {"Region", record.Region ?? ""},
+                    {"Country", record.Country ?? ""},
+                    {"BillTo", record.BillTo ?? ""},
+                    {"ShipTo", record.ShipTo ?? ""},
+                    {"ClientId", record.ClientId ?? ""},
+                    {"DateCreated", record.DateCreated ?? ""},
+                    {"AllParts", record.AllParts ?? ""}
+                };
+                
+                // Use existing Lucene method to index with metadata
+                _luceneInterface.IndexSingleFileWithMetadata(tempFilePath, metadata, forceReindex: true);
+                
+                Console.WriteLine($"✅ Successfully indexed to Lucene: {fileName}");
+                
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error creating Lucene document for {fileName}: {ex.Message}");
+                throw;
+            }
+        }
+
+        // Method to initialize database connection for indexing (when called via API without session)
+        public void InitializeDatabaseForIndexing(string datasetId, string workgroupUrl)
+        {
+            try
+            {
+                Console.WriteLine($"🔗 Initializing database connection for indexing - DatasetId: {datasetId}");
+                
+                _storedDatasetId = datasetId;
+                _storedWorkgroupUrl = workgroupUrl;
+                
+                // Create and test the connection
+                database = new Database()
+                {
+                    Id = datasetId,
+                    WorkgroupServerURL = workgroupUrl
+                };
+                database.Connect();
+                
+                Console.WriteLine("✅ Database connection initialized successfully for indexing");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Failed to initialize database for indexing: {ex.Message}");
+                throw new InvalidOperationException($"Failed to initialize database connection: {ex.Message}", ex);
             }
         }
         

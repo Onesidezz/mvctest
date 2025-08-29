@@ -8,6 +8,8 @@ namespace mvctest.Services
         void InitializeLucene();
         List<SearchResultModel> SearchFiles(string query);
         List<SearchResultModel> SearchFilesInPaths(string query, List<string> filePaths);
+        List<SearchResultModel> SearchFilesFromIndex2(string query);
+        List<SearchResultModel> SearchSyncedRecords(string query);
         List<SearchResultModel> SemanticSearch(string query, List<string> filePaths = null, int maxResults = 10);
         void IndexFilesInternal(List<string> filesToIndex, bool forceReindex);
         List<string> GetAllContentSnippets(string content, string query, int maxLength);
@@ -16,6 +18,7 @@ namespace mvctest.Services
         void BatchIndexFilesFromContentManager(List<string> directories);
         void CommitIndex();
         Task<bool> ProcessFilesInDirectory(string directoryPath);
+        void IndexSingleFileWithMetadata(string filePath, Dictionary<string, string> metadata, bool forceReindex = false);
 
     }
 }

@@ -7,19 +7,21 @@ using System.Text;
 
 namespace mvctest.Controllers
 {
-    public partial class ContentManagerController : Controller
+    public class ContentManagerController : Controller
     {
         private readonly ILuceneInterface _luceneInterface;
         private readonly IContentManager _contentManager;
         private readonly IChatMLService _chatMLService;
         private readonly AppSettings _appSettings;
-
-        public ContentManagerController(IContentManager contentManager, ILuceneInterface luceneInterface, IChatMLService chatMLService, IOptions<AppSettings> appSettings)
+        private readonly ContentManagerHelperService _helperService;
+      
+        public ContentManagerController(IContentManager contentManager, ILuceneInterface luceneInterface, IChatMLService chatMLService, IOptions<AppSettings> appSettings, ContentManagerHelperService helperService)
         {
             _contentManager = contentManager;
             _luceneInterface = luceneInterface;
             _chatMLService = chatMLService;
             _appSettings = appSettings.Value;
+            _helperService = helperService;
 
             // Initialize ML.NET Advanced Search Service
             var indexPath = Path.Combine("C:\\Users\\ukhan2\\Desktop\\", "ml_advanced_index");
@@ -240,7 +242,7 @@ namespace mvctest.Controllers
                     ShowSentenceContext = showSentenceContext
                 };
 
-                var enhancedResults = await PerformEnhancedSearch(searchParams, performance);
+                var enhancedResults = await _helperService.PerformEnhancedSearch(searchParams, performance);
 
                 enhancedResults.Performance = performance;
                 enhancedResults.UsedMode = mode;
@@ -276,7 +278,7 @@ namespace mvctest.Controllers
                             .Where(r => r.Snippets != null && r.Snippets.Any())
                             .SelectMany(r => r.Snippets)
                             .Distinct()
-                            .Select(snippet => ExtractCompleteSentence(snippet, content)) // Extract complete sentences based on full stops
+                            .Select(snippet => _helperService.ExtractCompleteSentence(snippet, content)) // Extract complete sentences based on full stops
                             .Where(snippet => !string.IsNullOrWhiteSpace(snippet)) // Filter out null/empty results
                             .Take(5) // Limit to maximum 5 snippets per file
                             .ToList();
@@ -444,7 +446,7 @@ namespace mvctest.Controllers
                 Console.WriteLine($"⏱️ Starting Enhanced Multi-Level search at: {searchStartTime.TotalSeconds:F2} seconds");
 
                 // Use enhanced search with intelligent mode detection
-                var searchMode = DetectOptimalSearchMode(request.Query);
+                var searchMode = _helperService.DetectOptimalSearchMode(request.Query);
                 Console.WriteLine($"🎯 Detected optimal search mode: {searchMode}");
 
                 var searchParams = new AdvancedSearchParameters
@@ -457,7 +459,7 @@ namespace mvctest.Controllers
                 };
 
                 var performance = new SearchPerformanceMetrics();
-                var enhancedResults = await PerformEnhancedPathSearch(searchParams, request.FilePaths, performance,true);
+                var enhancedResults = await _helperService.PerformEnhancedPathSearch(searchParams, request.FilePaths, performance, true, _luceneInterface);
 
                 // Convert to the expected format
                 var searchResults = enhancedResults.DocumentResults
@@ -531,7 +533,7 @@ namespace mvctest.Controllers
                     Console.WriteLine($"⏱️ Starting AI generation at: {aiStartTime.TotalSeconds:F2} seconds");
 
                     // 🎯 SMART EARLY TERMINATION LOGIC
-                    enhancedAnswer = await GenerateAnswerWithEarlyTermination(request.Query, detailedResults);
+                    enhancedAnswer = await _helperService.GenerateAnswerWithEarlyTermination(request.Query, detailedResults);
 
                     aiEndTime = stopwatch.Elapsed;
                     Console.WriteLine($"⏱️ AI generation completed at: {aiEndTime.TotalSeconds:F2} seconds (took {(aiEndTime - aiStartTime).TotalSeconds:F2} seconds)");
@@ -633,7 +635,7 @@ namespace mvctest.Controllers
                 Console.WriteLine($"⏱️ Starting Enhanced Multi-Level search at: {searchStartTime.TotalSeconds:F2} seconds");
 
                 // Use enhanced search with intelligent mode detection
-                var searchMode = DetectOptimalSearchMode(request.Query);
+                var searchMode = _helperService.DetectOptimalSearchMode(request.Query);
                 Console.WriteLine($"🎯 Detected optimal search mode: {searchMode}");
 
                 var searchParams = new AdvancedSearchParameters
@@ -646,7 +648,7 @@ namespace mvctest.Controllers
                 };
 
                 var performance = new SearchPerformanceMetrics();
-                var enhancedResults = await PerformEnhancedPathSearch(searchParams, request.FilePaths, performance,request.FromAnalytics);
+                var enhancedResults = await _helperService.PerformEnhancedPathSearch(searchParams, request.FilePaths, performance, request.FromAnalytics, _luceneInterface);
 
                 // Convert to the expected format
                 var searchResults = enhancedResults.DocumentResults
@@ -720,7 +722,7 @@ namespace mvctest.Controllers
                     Console.WriteLine($"⏱️ Starting AI generation at: {aiStartTime.TotalSeconds:F2} seconds");
 
                     // 🎯 SMART EARLY TERMINATION LOGIC
-                    enhancedAnswer = await GenerateAnswerWithEarlyTermination(request.Query, detailedResults);
+                    enhancedAnswer = await _helperService.GenerateAnswerWithEarlyTermination(request.Query, detailedResults);
 
                     aiEndTime = stopwatch.Elapsed;
                     Console.WriteLine($"⏱️ AI generation completed at: {aiEndTime.TotalSeconds:F2} seconds (took {(aiEndTime - aiStartTime).TotalSeconds:F2} seconds)");
@@ -796,365 +798,6 @@ namespace mvctest.Controllers
             }
         }
 
-        private string ExtractCompleteSentence(string snippet, string searchQuery = "")
-        {
-            if (string.IsNullOrWhiteSpace(snippet))
-                return string.Empty;
-
-            try
-            {
-                // Remove "Sentence N:" prefix if it exists
-                var cleanSnippet = System.Text.RegularExpressions.Regex.Replace(snippet, @"^Sentence \d+:\s*", "").Trim();
-                
-                if (string.IsNullOrWhiteSpace(cleanSnippet))
-                    return string.Empty;
-
-                // Debug logging for Excel files
-                if (cleanSnippet.Contains(" | ") || cleanSnippet.Contains("[ROW") || cleanSnippet.Contains("[SHEET"))
-                {
-                    Console.WriteLine($"Processing Excel snippet: {cleanSnippet.Substring(0, Math.Min(100, cleanSnippet.Length))}...");
-                }
-
-                // Handle Excel structured data (detect by presence of [ROW], [SHEET] markers, or Excel-specific content)
-                if (cleanSnippet.Contains("[ROW") || cleanSnippet.Contains("[SHEET") || 
-                    cleanSnippet.Contains("Document GUID:") || cleanSnippet.Contains("Generated:") ||
-                    cleanSnippet.Contains("[END ROW"))
-                {
-                    return ExtractStructuredDataSnippet(cleanSnippet, searchQuery);
-                }
-
-                // If the snippet already looks like a complete sentence, return it
-                if (cleanSnippet.Length > 10 && cleanSnippet.EndsWith('.'))
-                {
-                    return cleanSnippet;
-                }
-
-                // Remove any HTML tags like <strong> for text processing, but keep original for return
-                var textOnly = System.Text.RegularExpressions.Regex.Replace(cleanSnippet, @"<[^>]+>", "");
-                
-                if (string.IsNullOrWhiteSpace(textOnly))
-                    return cleanSnippet; // Return original if only HTML tags
-
-                // Find sentence boundaries using regex (more reliable)
-                var sentences = System.Text.RegularExpressions.Regex.Split(textOnly, @"(?<=[.!?])\s+(?=[A-Z])")
-                    .Where(s => !string.IsNullOrWhiteSpace(s))
-                    .ToList();
-
-                if (sentences.Count == 0)
-                    return cleanSnippet;
-
-                // If we have multiple sentences, take the first complete one
-                var firstSentence = sentences[0].Trim();
-                
-                // If the first sentence doesn't end with punctuation, try to find a complete sentence
-                if (!firstSentence.EndsWith('.') && !firstSentence.EndsWith('!') && !firstSentence.EndsWith('?'))
-                {
-                    // Look for the first complete sentence
-                    var completeSentence = sentences.FirstOrDefault(s => s.Trim().EndsWith('.') || s.Trim().EndsWith('!') || s.Trim().EndsWith('?'));
-                    if (!string.IsNullOrEmpty(completeSentence))
-                    {
-                        firstSentence = completeSentence.Trim();
-                    }
-                    else
-                    {
-                        // If no complete sentence found, add a period to the first sentence
-                        firstSentence = firstSentence.TrimEnd() + ".";
-                    }
-                }
-
-                // Map back to original with HTML tags preserved
-                var result = MapSentenceBackToOriginal(cleanSnippet, firstSentence);
-                return string.IsNullOrWhiteSpace(result) ? cleanSnippet : result;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error in ExtractCompleteSentence: {ex.Message}");
-                return snippet; // Return original on any error
-            }
-        }
-
-        private string ExtractStructuredDataSnippet(string snippet, string searchQuery = "")
-        {
-            try
-            {
-                Console.WriteLine($"ExtractStructuredDataSnippet called with: {snippet.Substring(0, Math.Min(200, snippet.Length))}...");
-                
-                // For Excel structured data, extract meaningful content while preserving structure
-                var lines = snippet.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(line => line.Trim())
-                    .Where(line => !string.IsNullOrWhiteSpace(line))
-                    .ToList();
-
-                var dataRows = new List<string>();
-                bool foundHeader = false;
-                string headerRow = "";
-
-                foreach (var line in lines)
-                {
-                    // Skip structural markers that don't contain data
-                    if (line.StartsWith("[ROW") && line.EndsWith("]"))
-                        continue;
-                    if (line.StartsWith("[END ROW") && line.EndsWith("]"))
-                        continue;
-                    if (line.StartsWith("[SHEET") && line.EndsWith("]"))
-                        continue;
-                    if (line.StartsWith("[END SHEET") && line.EndsWith("]"))
-                        continue;
-                    if (line.StartsWith("Document GUID:") || line.StartsWith("Generated:"))
-                        continue; // Skip metadata lines
-
-                    // Check if this looks like a header row (contains common column names)
-                    if (!foundHeader && IsHeaderRow(line))
-                    {
-                        headerRow = line;
-                        foundHeader = true;
-                        Console.WriteLine($"Found header row: {line}");
-                        continue;
-                    }
-
-                    // Keep lines with actual data (not starting with [ and having multiple words/numbers)
-                    if (!line.StartsWith("[") && !line.EndsWith("]") && line.Split(' ').Length >= 3)
-                    {
-                        dataRows.Add(line);
-                        Console.WriteLine($"Added data row: {line}");
-                    }
-                }
-
-                Console.WriteLine($"Found {dataRows.Count} data rows");
-
-                // If we have meaningful content, format it nicely
-                if (dataRows.Any())
-                {
-                    var result = new StringBuilder();
-                    
-                    // Add header if we found one
-                    if (!string.IsNullOrEmpty(headerRow))
-                    {
-                        // Highlight search terms first, then format the header
-                        var highlightedHeader = HighlightSearchTerms(headerRow, searchQuery);
-                        result.Append("Headers: " + FormatExcelRow(highlightedHeader));
-                        result.Append(" | ");
-                    }
-
-                    // Filter rows that contain search terms if search query is provided
-                    var relevantRows = dataRows;
-                    if (!string.IsNullOrEmpty(searchQuery))
-                    {
-                        var searchTerms = searchQuery.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
-                        relevantRows = dataRows.Where(row => 
-                            searchTerms.Any(term => row.Contains(term, StringComparison.OrdinalIgnoreCase))
-                        ).ToList();
-                        
-                        // If no rows contain search terms, fall back to all rows
-                        if (!relevantRows.Any())
-                        {
-                            relevantRows = dataRows;
-                        }
-                    }
-
-                    // Limit to first 2 relevant rows to avoid overly long snippets
-                    var limitedRows = relevantRows.Take(2).ToList();
-                    
-                    var formattedRows = new List<string>();
-                    foreach (var row in limitedRows)
-                    {
-                        // Highlight search terms first, then format the row
-                        var highlightedRow = HighlightSearchTerms(row, searchQuery);
-                        formattedRows.Add(FormatExcelRow(highlightedRow));
-                    }
-                    
-                    result.Append("Data: " + string.Join(" • ", formattedRows));
-                    
-                    // Add note if search terms were found
-                    if (!string.IsNullOrEmpty(searchQuery) && relevantRows.Count < dataRows.Count)
-                    {
-                        result.Append($" (showing {limitedRows.Count} of {relevantRows.Count} matching rows)");
-                    }
-                    
-                    // Ensure it ends with proper punctuation
-                    var resultString = result.ToString();
-                    if (!resultString.EndsWith('.') && !resultString.EndsWith('!') && !resultString.EndsWith('?') && !resultString.EndsWith(')'))
-                    {
-                        resultString += ".";
-                    }
-                    
-                    Console.WriteLine($"Returning formatted result with search terms: {resultString}");
-                    return resultString;
-                }
-
-                Console.WriteLine("No meaningful lines found, returning fallback");
-                // Fallback: return original snippet with added punctuation
-                var fallback = snippet.Trim();
-                if (fallback.Length > 200)
-                {
-                    fallback = fallback.Substring(0, 200) + "...";
-                }
-                if (!fallback.EndsWith('.') && !fallback.EndsWith('!') && !fallback.EndsWith('?'))
-                {
-                    fallback += ".";
-                }
-                return fallback;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error in ExtractStructuredDataSnippet: {ex.Message}");
-                // Return original with punctuation as fallback
-                var fallback = snippet.Trim();
-                if (fallback.Length > 200)
-                {
-                    fallback = fallback.Substring(0, 200) + "...";
-                }
-                if (!fallback.EndsWith('.') && !fallback.EndsWith('!') && !fallback.EndsWith('?'))
-                {
-                    fallback += ".";
-                }
-                return fallback;
-            }
-        }
-
-        private bool IsHeaderRow(string line)
-        {
-            var commonHeaders = new[] { "ID", "Date", "Category", "Description", "Value", "Status", "Name", "Type", "Amount", "Code", "Title", "Email", "Phone", "Address" };
-            var words = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            
-            // If line has multiple words that match common headers, it's likely a header
-            var headerMatches = words.Count(word => commonHeaders.Any(header => 
-                string.Equals(word, header, StringComparison.OrdinalIgnoreCase)));
-                
-            return headerMatches >= 2; // Need at least 2 header-like words
-        }
-
-        private string FormatExcelRow(string row)
-        {
-            try
-            {
-                // If row contains highlighting tags, preserve them during formatting
-                if (row.Contains("<strong>"))
-                {
-                    // For highlighted content, be more generous with length to preserve search terms
-                    return row.Length > 200 ? row.Substring(0, 200) + "..." : row;
-                }
-
-                var parts = row.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                
-                // For very long rows, show first few and last few parts
-                if (parts.Length > 8)
-                {
-                    var firstParts = parts.Take(4);
-                    var lastParts = parts.TakeLast(2);
-                    return string.Join(" ", firstParts) + " ... " + string.Join(" ", lastParts);
-                }
-                else if (parts.Length > 6)
-                {
-                    // Show first 6 parts
-                    return string.Join(" ", parts.Take(6)) + "...";
-                }
-                else
-                {
-                    return row;
-                }
-            }
-            catch
-            {
-                return row.Length > 50 ? row.Substring(0, 50) + "..." : row;
-            }
-        }
-
-        private string HighlightSearchTerms(string text, string searchQuery)
-        {
-            if (string.IsNullOrEmpty(searchQuery) || string.IsNullOrEmpty(text))
-                return text;
-
-            try
-            {
-                var searchTerms = searchQuery.Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
-                var result = text;
-
-                foreach (var term in searchTerms)
-                {
-                    if (term.Length > 1) // Skip single character terms
-                    {
-                        // Use case-insensitive replacement with <strong> tags for highlighting
-                        var pattern = System.Text.RegularExpressions.Regex.Escape(term);
-                        result = System.Text.RegularExpressions.Regex.Replace(
-                            result, 
-                            pattern, 
-                            match => $"<strong>{match.Value}</strong>", 
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase
-                        );
-                    }
-                }
-
-                Console.WriteLine($"Highlighted '{searchQuery}' in text: {result.Substring(0, Math.Min(150, result.Length))}...");
-                return result;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error highlighting search terms: {ex.Message}");
-                return text; // Return original text if highlighting fails
-            }
-        }
-
-        private string MapSentenceBackToOriginal(string originalWithTags, string textOnlySentence)
-        {
-            if (string.IsNullOrWhiteSpace(textOnlySentence))
-                return string.Empty;
-
-            try
-            {
-                // Simple approach: find the text in the original and extract up to its end
-                var textOnly = System.Text.RegularExpressions.Regex.Replace(originalWithTags, @"<[^>]+>", "");
-                var endIndex = textOnly.IndexOf(textOnlySentence.TrimEnd('.', '!', '?'));
-                
-                if (endIndex >= 0)
-                {
-                    var endPos = endIndex + textOnlySentence.TrimEnd('.', '!', '?').Length;
-                    
-                    // Find corresponding position in original with tags
-                    var result = new System.Text.StringBuilder();
-                    var originalIndex = 0;
-                    var textOnlyIndex = 0;
-                    
-                    while (originalIndex < originalWithTags.Length && textOnlyIndex <= endPos)
-                    {
-                        if (originalWithTags[originalIndex] == '<')
-                        {
-                            // Copy HTML tag
-                            while (originalIndex < originalWithTags.Length && originalWithTags[originalIndex] != '>')
-                            {
-                                result.Append(originalWithTags[originalIndex]);
-                                originalIndex++;
-                            }
-                            if (originalIndex < originalWithTags.Length)
-                            {
-                                result.Append(originalWithTags[originalIndex]);
-                                originalIndex++;
-                            }
-                        }
-                        else
-                        {
-                            result.Append(originalWithTags[originalIndex]);
-                            originalIndex++;
-                            textOnlyIndex++;
-                        }
-                    }
-                    
-                    var finalResult = result.ToString().Trim();
-                    if (!finalResult.EndsWith('.') && !finalResult.EndsWith('!') && !finalResult.EndsWith('?'))
-                    {
-                        finalResult += ".";
-                    }
-                    
-                    return finalResult;
-                }
-            }
-            catch
-            {
-                // If mapping fails, return original
-            }
-
-            return originalWithTags;
-        }
 
     }
 

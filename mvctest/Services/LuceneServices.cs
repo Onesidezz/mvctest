@@ -17,8 +17,12 @@ namespace mvctest.Services
     {
         private readonly LuceneVersion LuceneVersion = LuceneVersion.LUCENE_48;
         private readonly string IndexPath;
+        private readonly string IndexPath2;
+
         private IndexWriter indexWriter;
+        private IndexWriter indexWriter2;
         private StandardAnalyzer analyzer;
+        private StandardAnalyzer analyzer2;
         private readonly AppSettings _settings;
         private DirectoryReader indexReader;
         private IndexSearcher indexSearcher;
@@ -34,8 +38,14 @@ namespace mvctest.Services
             IndexPath = !string.IsNullOrEmpty(_settings.IndexDirectory)
                 ? _settings.IndexDirectory
                 : Path.Combine(Environment.CurrentDirectory, "index");
-
+            
+            // Use IndexDirectory2 from settings, fallback to default if not set
+            IndexPath2 = !string.IsNullOrEmpty(_settings.IndexDirectory2)
+                ? _settings.IndexDirectory2
+                : Path.Combine(Environment.CurrentDirectory, "index2");
+            
             InitializeLucene();
+            InitializeLucene2();
             _serviceProvider = serviceProvider;
 
             // Initialize embedding service for semantic search
@@ -70,11 +80,29 @@ namespace mvctest.Services
                 }
 
                 var indexDir = FSDirectory.Open(IndexPath);
+                
+                // Check for stale locks and clear them
+                var lockFile = Path.Combine(IndexPath, "write.lock");
+                if (File.Exists(lockFile))
+                {
+                    Console.WriteLine("Found stale lock file for IndexPath, attempting to clear it...");
+                    try
+                    {
+                        File.Delete(lockFile);
+                        Console.WriteLine("Deleted stale lock file for IndexPath");
+                    }
+                    catch (Exception lockEx)
+                    {
+                        Console.WriteLine($"Could not delete lock file: {lockEx.Message}");
+                    }
+                }
+
                 analyzer = new StandardAnalyzer(LuceneVersion);
 
                 var config = new IndexWriterConfig(LuceneVersion, analyzer)
                 {
-                    OpenMode = OpenMode.CREATE_OR_APPEND
+                    OpenMode = OpenMode.CREATE_OR_APPEND,
+                    WriteLockTimeout = 10000 // 10 second timeout
                 };
 
                 indexWriter = new IndexWriter(indexDir, config);
@@ -85,10 +113,138 @@ namespace mvctest.Services
                 indexReader = null;
                 indexSearcher = null;
             }
+            catch (LockObtainFailedException ex)
+            {
+                Console.WriteLine($"Lock obtain failed for IndexPath: {ex.Message}");
+                Console.WriteLine("Attempting to force unlock IndexPath...");
+                
+                try
+                {
+                    // Force unlock by deleting lock file
+                    var lockFile = Path.Combine(IndexPath, "write.lock");
+                    if (File.Exists(lockFile))
+                    {
+                        File.Delete(lockFile);
+                        Console.WriteLine("Deleted lock file for IndexPath");
+                        
+                        // Retry initialization
+                        var indexDir = FSDirectory.Open(IndexPath);
+                        analyzer = new StandardAnalyzer(LuceneVersion);
+                        var config = new IndexWriterConfig(LuceneVersion, analyzer)
+                        {
+                            OpenMode = OpenMode.CREATE_OR_APPEND,
+                            WriteLockTimeout = 5000
+                        };
+                        indexWriter = new IndexWriter(indexDir, config);
+                        Console.WriteLine($"Lucene.NET initialized successfully after lock cleanup at: {IndexPath}");
+                        
+                        indexReader = null;
+                        indexSearcher = null;
+                    }
+                    else
+                    {
+                        throw; // Re-throw if no lock file found
+                    }
+                }
+                catch (Exception retryEx)
+                {
+                    Console.WriteLine($"Failed to initialize IndexPath after retry: {retryEx.Message}");
+                    throw;
+                }
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error initializing Lucene: {ex.Message}");
                 throw;
+            }
+        }
+
+        public void InitializeLucene2()
+        {
+            try
+            {
+                if (!Directory.Exists(IndexPath2))
+                {
+                    Directory.CreateDirectory(IndexPath2);
+                    Console.WriteLine($"Created index2 directory: {IndexPath2}");
+                }
+
+                var indexDir2 = FSDirectory.Open(IndexPath2);
+                
+                // Check for stale locks and clear them
+                var lockFile = Path.Combine(IndexPath2, "write.lock");
+                if (File.Exists(lockFile))
+                {
+                    Console.WriteLine("Found stale lock file for IndexPath2, attempting to clear it...");
+                    try
+                    {
+                        File.Delete(lockFile);
+                        Console.WriteLine("Deleted stale lock file for IndexPath2");
+                    }
+                    catch (Exception lockEx)
+                    {
+                        Console.WriteLine($"Could not delete lock file: {lockEx.Message}");
+                    }
+                }
+
+                analyzer2 = new StandardAnalyzer(LuceneVersion);
+
+                var config2 = new IndexWriterConfig(LuceneVersion, analyzer2)
+                {
+                    OpenMode = OpenMode.CREATE_OR_APPEND,
+                    WriteLockTimeout = 10000 // 10 second timeout
+                };
+
+                indexWriter2 = new IndexWriter(indexDir2, config2);
+                Console.WriteLine($"Lucene.NET IndexPath2 initialized successfully at: {IndexPath2}");
+            }
+            catch (LockObtainFailedException ex)
+            {
+                Console.WriteLine($"Lock obtain failed for IndexPath2: {ex.Message}");
+                Console.WriteLine("Attempting to force unlock IndexPath2...");
+                
+                try
+                {
+                    // Force unlock by deleting lock file
+                    var lockFile = Path.Combine(IndexPath2, "write.lock");
+                    if (File.Exists(lockFile))
+                    {
+                        File.Delete(lockFile);
+                        Console.WriteLine("Deleted lock file for IndexPath2");
+                        
+                        // Retry initialization
+                        var indexDir2 = FSDirectory.Open(IndexPath2);
+                        analyzer2 = new StandardAnalyzer(LuceneVersion);
+                        var config2 = new IndexWriterConfig(LuceneVersion, analyzer2)
+                        {
+                            OpenMode = OpenMode.CREATE_OR_APPEND,
+                            WriteLockTimeout = 5000
+                        };
+                        indexWriter2 = new IndexWriter(indexDir2, config2);
+                        Console.WriteLine($"Lucene.NET IndexPath2 initialized successfully after lock cleanup at: {IndexPath2}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("No lock file found for IndexPath2, but lock still exists. Using fallback initialization.");
+                        // Initialize without writer for read-only operations
+                        analyzer2 = new StandardAnalyzer(LuceneVersion);
+                        indexWriter2 = null;
+                    }
+                }
+                catch (Exception retryEx)
+                {
+                    Console.WriteLine($"Failed to initialize IndexPath2 after retry: {retryEx.Message}");
+                    // Initialize without writer for read-only operations
+                    analyzer2 = new StandardAnalyzer(LuceneVersion);
+                    indexWriter2 = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error initializing Lucene IndexPath2: {ex.Message}");
+                // Initialize analyzer even if writer fails
+                analyzer2 = new StandardAnalyzer(LuceneVersion);
+                indexWriter2 = null;
             }
         }
 
@@ -281,6 +437,103 @@ namespace mvctest.Services
                 Console.WriteLine($"Error indexing file {Path.GetFileName(filePath)}: {ex.Message}");
                 throw;
             }
+        }
+
+        // Overloaded method for Dictionary<string, string> metadata (for TRIM ContentManager)
+        public void IndexSingleFileWithMetadata(string filePath, Dictionary<string, string> metadata, bool forceReindex = false)
+        {
+            try
+            {
+                // Check if file exists
+                if (!File.Exists(filePath))
+                {
+                    Console.WriteLine($"File not found: {filePath}");
+                    return;
+                }
+
+                // Check if already indexed (unless force reindex)
+                if (!forceReindex && IsFileAlreadyInIndex(filePath))
+                {
+                    Console.WriteLine($"File already indexed: {Path.GetFileName(filePath)}");
+                    return;
+                }
+
+                // Delete existing document to prevent duplicates
+                DeleteExistingDocument(filePath);
+
+                // Extract file content
+                var content = "";
+                var fileName = Path.GetFileName(filePath);
+                var fileExtension = Path.GetExtension(filePath).ToLower().TrimStart('.');
+                
+                // Enhanced extraction for Excel files
+                if (fileExtension == "xlsx")
+                {
+                    content = ExtractStructuredExcelContent(filePath);
+                }
+                else
+                {
+                    content = FileTextExtractor.ExtractTextFromFile(filePath);
+                }
+
+                // Create Lucene document
+                var doc = new Document();
+
+                // Basic file fields
+                doc.Add(new TextField("filename", fileName, Field.Store.YES));
+                doc.Add(new TextField("filepath", filePath, Field.Store.YES));
+                doc.Add(new TextField("content", content, Field.Store.YES));
+                doc.Add(new StringField("filetype", fileExtension, Field.Store.YES));
+                doc.Add(new StringField("indexed_date", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), Field.Store.YES));
+                doc.Add(new StringField("file_modified_date", File.GetLastWriteTime(filePath).ToString("yyyy-MM-dd HH:mm:ss"), Field.Store.YES));
+
+                // Add TRIM metadata fields from dictionary
+                foreach (var kvp in metadata)
+                {
+                    if (!string.IsNullOrEmpty(kvp.Value))
+                    {
+                        // Use StringField for exact matching fields, TextField for searchable content
+                        if (IsExactMatchField(kvp.Key))
+                        {
+                            doc.Add(new StringField(kvp.Key, kvp.Value, Field.Store.YES));
+                        }
+                        else
+                        {
+                            doc.Add(new TextField(kvp.Key, kvp.Value, Field.Store.YES));
+                        }
+                    }
+                }
+
+                // Create searchable full text combining content and metadata
+                var fullTextParts = new List<string> { content };
+                fullTextParts.AddRange(metadata.Values.Where(v => !string.IsNullOrEmpty(v)));
+                var fullText = string.Join(" ", fullTextParts);
+                doc.Add(new TextField("full_text", fullText, Field.Store.NO));
+
+                // Add document to index
+                indexWriter.AddDocument(doc);
+
+                // Mark as indexed
+                var tracker = new FileIndexTracker(IndexPath);
+                tracker.MarkFileAsIndexed(filePath);
+
+                var uriValue = metadata.ContainsKey("URI") ? metadata["URI"] : "Unknown";
+                var titleValue = metadata.ContainsKey("Title") ? metadata["Title"] : fileName;
+                Console.WriteLine($"✅ TRIM record indexed: {fileName} (URI: {uriValue}) - {titleValue}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Error indexing TRIM record {Path.GetFileName(filePath)}: {ex.Message}");
+                throw;
+            }
+        }
+
+        // Helper method to determine field types for indexing
+        private bool IsExactMatchField(string fieldName)
+        {
+            // Fields that should be indexed as StringField for exact matching
+            var exactMatchFields = new[] { "URI", "ClientId", "DateCreated", "Container", "Region", "Country" };
+            return exactMatchFields.Contains(fieldName, StringComparer.OrdinalIgnoreCase);
         }
 
         public void IndexFilesInternal(List<string> filesToIndex, bool forceReindex)
@@ -599,6 +852,389 @@ namespace mvctest.Services
                 Console.WriteLine($"Error during search: {ex.Message}");
                 return resultList;
             }
+        }
+
+        public List<SearchResultModel> SearchFilesFromIndex2(string query)
+        {
+            var resultList = new List<SearchResultModel>();
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                Console.WriteLine("Please enter a valid search query.");
+                return resultList;
+            }
+
+            try
+            {
+                // First, check if index2 exists and has content
+                var indexDirectory2 = FSDirectory.Open(IndexPath2);
+
+                if (!DirectoryReader.IndexExists(indexDirectory2))
+                {
+                    Console.WriteLine("Index2 does not exist. Please index some files first.");
+                    return resultList;
+                }
+
+                // Commit any pending changes to ensure index is up to date (if writer is available)
+                if (indexWriter2 != null)
+                {
+                    indexWriter2.Commit();
+                }
+
+                // ALWAYS create a fresh reader for search to see latest changes
+                using var reader = DirectoryReader.Open(indexDirectory2);
+
+                // Check if index has any documents
+                if (reader.NumDocs == 0)
+                {
+                    Console.WriteLine("Index2 is empty. Please index some files first.");
+                    return resultList;
+                }
+
+                var searcher = new IndexSearcher(reader);
+
+                // Try comprehensive search first (includes sentences and regular documents)
+                var comprehensiveQuery = BuildComprehensiveQueryForIndex2(query);
+                var hits = searcher.Search(comprehensiveQuery, 50).ScoreDocs;
+                
+                if (hits.Length > 0)
+                {
+                    Console.WriteLine($"Found {hits.Length} comprehensive search results from Index2");
+                    
+                    // Group results by file path to combine multiple sentences from the same file
+                    var groupedResults = new Dictionary<string, SearchResultModel>();
+                    
+                    foreach (var hit in hits)
+                    {
+                        var doc = searcher.Doc(hit.Doc);
+                        var docType = doc.Get("doc_type") ?? "document";
+                        
+                        if (docType == "sentence")
+                        {
+                            // Handle sentence results - get parent document info
+                            var parentFile = doc.Get("parent_file") ?? "";
+                            var parentFilename = doc.Get("parent_filename") ?? "";
+                            var sentenceContent = doc.Get("sentence_content") ?? "";
+                            var sentenceIndex = doc.Get("sentence_index") ?? "0";
+                            
+                            // Highlight the sentence content
+                            var highlightedSentence = sentenceContent;
+                            var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                            foreach (var word in queryWords)
+                            {
+                                var regex = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(word)}\b",
+                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                highlightedSentence = regex.Replace(highlightedSentence, $"<strong>$0</strong>");
+                            }
+                            
+                            // Group by file path
+                            if (groupedResults.ContainsKey(parentFile))
+                            {
+                                // Add sentence to existing file result
+                                groupedResults[parentFile].Snippets.Add($"Sentence {sentenceIndex}: {highlightedSentence}");
+                                // Update score to highest score among sentences
+                                if (hit.Score > groupedResults[parentFile].Score)
+                                {
+                                    groupedResults[parentFile].Score = hit.Score;
+                                }
+                            }
+                            else
+                            {
+                                // Create new file result
+                                groupedResults[parentFile] = new SearchResultModel
+                                {
+                                    FileName = parentFilename,
+                                    FilePath = parentFile,
+                                    Score = hit.Score,
+                                    Snippets = new List<string> { $"Sentence {sentenceIndex}: {highlightedSentence}" },
+                                    date = doc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd")
+                                };
+                            }
+                        }
+                        else
+                        {
+                            // Handle regular document results
+                            var fileName = doc.Get("filename") ?? "";
+                            var filePath = doc.Get("filepath") ?? "";
+                            var content = doc.Get("content") ?? "";
+                            
+                            // Create highlighted snippets using GetAllContentSnippets - returns multiple snippets for multiple matches
+                            var snippets = GetAllContentSnippets(content, query, 250);
+                            
+                            // Group by file path
+                            if (groupedResults.ContainsKey(filePath))
+                            {
+                                // Add snippets to existing file result
+                                groupedResults[filePath].Snippets.AddRange(snippets);
+                                // Update score to highest score
+                                if (hit.Score > groupedResults[filePath].Score)
+                                {
+                                    groupedResults[filePath].Score = hit.Score;
+                                }
+                            }
+                            else
+                            {
+                                // Create new file result
+                                groupedResults[filePath] = new SearchResultModel
+                                {
+                                    FileName = fileName,
+                                    FilePath = filePath,
+                                    Score = hit.Score,
+                                    Snippets = snippets,
+                                    date = doc.Get("indexed_date") ?? DateTime.Now.ToString("yyyy-MM-dd")
+                                };
+                            }
+                        }
+                    }
+                    
+                    // Convert grouped results to list
+                    resultList = groupedResults.Values.OrderByDescending(r => r.Score).ToList();
+                    return resultList;
+                }
+
+                Console.WriteLine("No results found with comprehensive search in Index2");
+                return resultList;
+            }
+            catch (IndexNotFoundException ex)
+            {
+                Console.WriteLine("Index2 not found. Please index some files first.");
+                Console.WriteLine($"Index2 path: {IndexPath2}");
+                return resultList;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during Index2 search: {ex.Message}");
+                return resultList;
+            }
+        }
+
+        private Query BuildComprehensiveQueryForIndex2(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+
+            // 1. Search in regular document content - High boost
+            var parser = new QueryParser(LuceneVersion, "content", analyzer2);
+            try
+            {
+                var contentQuery = parser.Parse(query);
+                contentQuery.Boost = 3.0f;
+                booleanQuery.Add(contentQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                var contentTermQuery = new TermQuery(new Term("content", query));
+                contentTermQuery.Boost = 3.0f;
+                booleanQuery.Add(contentTermQuery, Occur.SHOULD);
+            }
+
+            // 2. Search in filename - Medium boost
+            try
+            {
+                var filenameQuery = parser.Parse($"filename:({query})");
+                filenameQuery.Boost = 2.0f;
+                booleanQuery.Add(filenameQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                var filenameTermQuery = new TermQuery(new Term("filename", query));
+                filenameTermQuery.Boost = 2.0f;
+                booleanQuery.Add(filenameTermQuery, Occur.SHOULD);
+            }
+
+            // 3. Sentence-level search - High boost for precise matches
+            var sentenceQuery = BuildSentenceQueryForIndex2(query);
+            sentenceQuery.Boost = 2.5f;
+            booleanQuery.Add(sentenceQuery, Occur.SHOULD);
+
+            return booleanQuery;
+        }
+
+        private Query BuildSentenceQueryForIndex2(string query)
+        {
+            var booleanQuery = new BooleanQuery();
+            
+            // Add document type filter for sentences
+            var docTypeQuery = new TermQuery(new Term("doc_type", "sentence"));
+            booleanQuery.Add(docTypeQuery, Occur.MUST);
+
+            // Search in sentence content with phrase matching
+            var parser = new QueryParser(LuceneVersion, "sentence_content", analyzer2);
+            try
+            {
+                // Try to parse as a phrase query first for better sentence matching
+                var sentenceQuery = parser.Parse($"\"{query}\"");
+                booleanQuery.Add(sentenceQuery, Occur.SHOULD);
+                
+                // Also add fuzzy matching for partial matches
+                var fuzzyQuery = parser.Parse(query);
+                fuzzyQuery.Boost = 0.7f; // Lower boost for fuzzy matches
+                booleanQuery.Add(fuzzyQuery, Occur.SHOULD);
+            }
+            catch
+            {
+                // Fallback to term query
+                var termQuery = new TermQuery(new Term("sentence_content", query));
+                booleanQuery.Add(termQuery, Occur.MUST);
+            }
+
+            return booleanQuery;
+        }
+
+        // New dedicated search method for SyncedRecords from IndexDirectory2
+        public List<SearchResultModel> SearchSyncedRecords(string query)
+        {
+            var resultList = new List<SearchResultModel>();
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                Console.WriteLine("Please enter a valid search query.");
+                return resultList;
+            }
+
+            try
+            {
+                // Use IndexDirectory2 where SyncApplication writes the records
+                var indexDirectory2 = FSDirectory.Open(IndexPath2);
+
+                if (!DirectoryReader.IndexExists(indexDirectory2))
+                {
+                    Console.WriteLine("SyncedRecords index does not exist. Please run SyncApplication indexing first.");
+                    return resultList;
+                }
+
+                // Commit any pending changes
+                if (indexWriter2 != null)
+                {
+                    indexWriter2.Commit();
+                }
+
+                using var reader = DirectoryReader.Open(indexDirectory2);
+
+                if (reader.NumDocs == 0)
+                {
+                    Console.WriteLine("SyncedRecords index is empty. Please run SyncApplication indexing first.");
+                    return resultList;
+                }
+
+                var searcher = new IndexSearcher(reader);
+                
+                // Search for both master records and word documents from SyncApplication indexing
+                var booleanQuery = new BooleanQuery();
+                
+                // Search master records (doc_type = "master_record")
+                var masterRecordQuery = new BooleanQuery();
+                masterRecordQuery.Add(new TermQuery(new Term("doc_type", "master_record")), Occur.MUST);
+                
+                // Add query for searchable content in master records
+                try
+                {
+                    var queryParser = new QueryParser(LuceneVersion, "searchable_content", analyzer2);
+                    var contentQuery = queryParser.Parse(query);
+                    masterRecordQuery.Add(contentQuery, Occur.MUST);
+                }
+                catch
+                {
+                    // Fallback to wildcard search on multiple fields
+                    var wildcardQuery = new BooleanQuery();
+                    var fields = new[] { "Title", "Container", "Region", "Country", "ClientId", "BillTo", "ShipTo", "file_content" };
+                    
+                    foreach (var field in fields)
+                    {
+                        try
+                        {
+                            var fieldQuery = new WildcardQuery(new Term(field, $"*{query.ToLower()}*"));
+                            wildcardQuery.Add(fieldQuery, Occur.SHOULD);
+                        }
+                        catch { }
+                    }
+                    
+                    if (wildcardQuery.Clauses.Count > 0)
+                        masterRecordQuery.Add(wildcardQuery, Occur.MUST);
+                }
+                
+                booleanQuery.Add(masterRecordQuery, Occur.SHOULD);
+
+                // Search word documents (doc_type = "word") 
+                var wordDocQuery = new BooleanQuery();
+                wordDocQuery.Add(new TermQuery(new Term("doc_type", "word")), Occur.MUST);
+                
+                try
+                {
+                    var wordQuery = new WildcardQuery(new Term("word", $"*{query.ToLower()}*"));
+                    wordDocQuery.Add(wordQuery, Occur.MUST);
+                }
+                catch
+                {
+                    var termQuery = new TermQuery(new Term("word", query.ToLower()));
+                    wordDocQuery.Add(termQuery, Occur.MUST);
+                }
+                
+                booleanQuery.Add(wordDocQuery, Occur.SHOULD);
+
+                var hits = searcher.Search(booleanQuery, 100).ScoreDocs;
+                Console.WriteLine($"Found {hits.Length} results in SyncedRecords index");
+
+                // Process results and combine by URI to return complete record objects
+                var recordsByURI = new Dictionary<string, SearchResultModel>();
+                
+                foreach (var hit in hits)
+                {
+                    var doc = searcher.Doc(hit.Doc);
+                    var docType = doc.Get("doc_type");
+                    var uri = doc.Get("URI") ?? doc.Get("parent_URI") ?? "";
+                    
+                    if (string.IsNullOrEmpty(uri)) continue;
+                    
+                    if (!recordsByURI.ContainsKey(uri))
+                    {
+                        // Create new record result
+                        var result = new SearchResultModel
+                        {
+                            FilePath = doc.Get("filepath") ?? doc.Get("DownloadLink") ?? "",
+                            FileName = doc.Get("Title") ?? doc.Get("parent_Title") ?? "Unknown",
+                            Metadata = new Dictionary<string, string>(),
+                            Snippets = new List<string>(),
+                            date = doc.Get("DateCreated") ?? doc.Get("indexed_date")
+                        };
+                        
+                        // Extract all metadata fields for complete record object
+                        var fieldNames = new[] { 
+                            "URI", "Title", "Container", "Region", "Country", "ClientId", 
+                            "BillTo", "ShipTo", "Assignee", "DateCreated", "IsContainer", 
+                            "IsElectronic", "DownloadLink", "Extension", "CustomerID", "InvoiceNumber",
+                            "City", "CustomerAddress", "AllParts"
+                        };
+                        
+                        foreach (var fieldName in fieldNames)
+                        {
+                            var value = doc.Get(fieldName) ?? doc.Get($"parent_{fieldName}") ?? "";
+                            if (!string.IsNullOrEmpty(value))
+                            {
+                                result.Metadata[fieldName] = value;
+                            }
+                        }
+                        
+                        recordsByURI[uri] = result;
+                    }
+                    
+                    // Add search context/snippets
+                    if (docType == "word")
+                    {
+                        var context = doc.Get("context");
+                        if (!string.IsNullOrEmpty(context) && !recordsByURI[uri].Snippets.Contains(context))
+                        {
+                            recordsByURI[uri].Snippets.Add(context);
+                        }
+                    }
+                }
+                
+                resultList.AddRange(recordsByURI.Values);
+                Console.WriteLine($"Returning {resultList.Count} complete record objects");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error searching SyncedRecords: {ex.Message}");
+            }
+
+            return resultList;
         }
 
         public List<SearchResultModel> SearchFilesInPaths(string query, List<string> filePaths)
@@ -1504,7 +2140,9 @@ namespace mvctest.Services
             try
             {
                 indexWriter?.Dispose();
+                indexWriter2?.Dispose();
                 analyzer?.Dispose();
+                analyzer2?.Dispose();
                 _embeddingService?.Dispose();
                 Console.WriteLine("Lucene.NET resources cleaned up.");
             }

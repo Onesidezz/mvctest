@@ -140,8 +140,12 @@
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 
     <script>
-        // Show loader before full page unload
-        window.addEventListener('beforeunload', function () {
+        // Show loader before full page unload (but not for file downloads)
+        window.addEventListener('beforeunload', function (e) {
+            // Check if the current navigation is triggered by a download link
+            if (window.isDownloadTriggered) {
+                return; // Don't show loader for downloads
+            }
             $("#loader").show();
         });
 
@@ -157,9 +161,24 @@
         // Show loader on any <form> submit, only if chatContainer is hidden
         $(document).ready(function () {
             $("form").on("submit", function () {
+                // Skip loader for forms with data-skip-loader attribute
+                if ($(this).attr('data-skip-loader') === 'true') {
+                    return;
+                }
+                
                 if (!$("#chatContainer").is(":visible")) {
                     $("#loader").show();
                 }
+            });
+            
+            // Handle download links - prevent loader from showing
+            $(document).on('click', 'a[data-skip-loader="true"], .download-link', function(e) {
+                window.isDownloadTriggered = true;
+                
+                // Reset the flag after a short delay to allow normal navigation
+                setTimeout(function() {
+                    window.isDownloadTriggered = false;
+                }, 2000);
             });
         });
 

@@ -18,6 +18,30 @@
                     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                 </div>
             }
+
+            @if (TempData["SuccessMessage"] != null)
+            {
+                <div class="alert alert-success alert-dismissible">
+                    <i class="fas fa-check-circle me-2"></i>
+                    @TempData["SuccessMessage"]
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            }
+
+            @if (TempData["DownloadReady"] != null && (bool)TempData["DownloadReady"])
+            {
+                <div class="alert alert-info alert-dismissible">
+                    <i class="fas fa-download me-2"></i>
+                    <strong>Your download is ready!</strong>
+                    <a href="@Url.Action("DownloadZipFile", new { fileName = TempData["DownloadFileName"] })" 
+                       class="btn btn-primary btn-sm ms-2 download-link"
+                       data-skip-loader="true">
+                        <i class="fas fa-file-archive me-1"></i>
+                        Download ZIP (@TempData["DownloadFileName"])
+                    </a>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            }
         </div>
     </div>
 
@@ -79,6 +103,17 @@
                                 </label>
                                 <input type="text" class="form-control form-control-sm" id="clientId" name="clientId" 
                                        placeholder="Enter client ID">
+                            </div>
+                        </div>
+
+                        <!-- Content Search Row -->
+                        <div class="row g-2 mt-2">
+                            <div class="col-md-6">
+                                <label for="contentSearch" class="form-label small fw-semibold">
+                                    <i class="fas fa-file-search me-1"></i>Content Search
+                                </label>
+                                <input type="text" class="form-control form-control-sm" id="contentSearch" name="contentSearch" 
+                                       placeholder="Search in indexed file content">
                             </div>
                         </div>
 
@@ -229,6 +264,9 @@ $(document).ready(function() {
         const clientId = $('#clientId').val().trim();
         if (clientId) searchFilters.push({ 'ClientId': clientId });
         
+        const contentSearch = $('#contentSearch').val().trim();
+        if (contentSearch) searchFilters.push({ 'ContentSearch': contentSearch });
+        
         // Validate that at least one filter is provided
         if (searchFilters.length === 0) {
             alert('Please enter at least one search criterion.');
@@ -343,6 +381,9 @@ $(document).ready(function() {
         
         const clientId = $('#clientId').val().trim();
         if (clientId) searchFilters.push({ 'ClientId': clientId });
+        
+        const contentSearch = $('#contentSearch').val().trim();
+        if (contentSearch) searchFilters.push({ 'ContentSearch': contentSearch });
         
         // Make AJAX request for the specific page
         $.ajax({

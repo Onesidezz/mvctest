@@ -214,6 +214,7 @@ namespace mvctest.Services
             Timeout = TimeSpan.FromMinutes(5)
         };
 
+
         public async Task<string> DeepSeekSummarizeWithStreaming(string filePath, string prompt = "", string usermessage = "")
         {
             var stopwatch = Stopwatch.StartNew();
@@ -228,46 +229,26 @@ namespace mvctest.Services
             }
             else if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
             {
-                // Only extract file if usermessage is not provided
                 fileContent = FileTextExtractor.ExtractTextFromFile(filePath);
             }
             else
             {
                 throw new FileNotFoundException("File not found and user message is empty!");
             }
-
-            // Smart content truncation with better limits
-            const int maxContentLength = 50000; // Reduced from 100k for faster processing
-            if (fileContent.Length > maxContentLength)
-            {
-                // Try to truncate at sentence boundaries for better context
-                var truncatedContent = fileContent.Substring(0, maxContentLength);
-                var lastSentenceEnd = Math.Max(
-                    Math.Max(truncatedContent.LastIndexOf('.'), truncatedContent.LastIndexOf('!')),
-                    truncatedContent.LastIndexOf('?')
-                );
-                
-                if (lastSentenceEnd > maxContentLength * 0.8) // Only use sentence boundary if it's not too early
-                {
-                    fileContent = truncatedContent.Substring(0, lastSentenceEnd + 1) + " [Content truncated for performance]";
-                }
-                else
-                {
-                    fileContent = truncatedContent + "... [Content truncated for performance]";
-                }
-            }
-
-            // Optimized request body with faster model
+            // Optimized request body with enhanced settings for better large content handling
             var requestBody = new
             {
-                model = "qwen2.5:7b",
+                model = "qwen2.5:14b",//gemma:7b //qwen2.5:7b
                 prompt = $"{prompt}\n\n{fileContent}",
                 stream = true,
                 options = new
                 {
                     temperature = 0.3, 
                     top_p = 0.9,
-                    num_ctx = 4096 
+                    num_ctx = 32768, // Doubled context window for better comprehension
+                    num_predict = 4096, // Allow longer responses
+                     num_thread = Environment.ProcessorCount
+
                 }
             };
 
@@ -278,8 +259,8 @@ namespace mvctest.Services
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
 
-            // Use reduced timeout for better user experience
-            var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            // Extended timeout for large content processing
+            var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(15));
 
             try
             {
@@ -319,10 +300,10 @@ namespace mvctest.Services
                             {
                                 sb.Append(chunk);
                                 
-                                // Early termination for long responses to improve performance
-                                if (sb.Length > 5000) // Limit response length
+                                // Increased response length limit for better summaries
+                                if (sb.Length > 15000) // Higher limit for comprehensive summaries
                                 {
-                                    sb.Append(" [Response truncated for performance]");
+                                    sb.Append(" [Response truncated - summary continues...]");
                                     break;
                                 }
                             }
@@ -340,7 +321,7 @@ namespace mvctest.Services
 
                 return sb.ToString();
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
                 return "Response timeout - the operation took too long. Please try with a shorter document or query.";
             }
@@ -349,6 +330,24 @@ namespace mvctest.Services
                 Console.WriteLine($"HTTP Error in DeepSeekSummarizeWithStreaming: {ex.Message}");
                 return "Service temporarily unavailable. Please try again later.";
             }
+        }
+
+        // Fast chunking method for moderately large content (optimized for speed)
+
+        // Intelligent sampling method for very large content (fastest approach)
+
+        private List<string> CreateFastChunks(string content, int chunkSize, int overlapSize, int maxChunks)
+        {
+            var chunks = new List<string>();
+            
+            // Simple character-based chunking for speed
+            for (int i = 0; i < content.Length && chunks.Count < maxChunks; i += chunkSize - overlapSize)
+            {
+                var length = Math.Min(chunkSize, content.Length - i);
+                chunks.Add(content.Substring(i, length));
+            }
+            
+            return chunks;
         }
 
         public async Task<string> GetFileSummaryAsync(string filePath)

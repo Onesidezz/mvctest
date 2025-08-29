@@ -2,10 +2,10 @@
 
 <div class="card border-0 shadow-sm">
     <div class="results-header">
-        <div class="d-flex justify-content-between align-items-center">
+        <div class="d-flex justify-content-between align-items-center p-3">
             <div>
                 <h6 class="mb-1 fw-bold">
-                    <i class="fas fa-list-ul me-2"></i>
+                    <i class="fas fa-table me-2"></i>
                     Search Results
                 </h6>
                 @if (ViewBag.SearchFiltersJson != null)
@@ -30,31 +30,31 @@
         </div>
     </div>
 
-    <div class="card-body p-0">
-        <!-- Selected Records Count -->
-        <div class="selected-count"></div>
+    <!-- Selected Records Count -->
+    <div class="selected-count"></div>
 
-        @if (Model?.Records != null && Model.Records.Any())
-        {
-            <!-- Hierarchical Container View -->
-            <div class="container-tree">
-                @{
-                    // Group records by container - only show containers that have records
-                    var groupedByContainer = Model.Records
-                        .Where(r => !string.IsNullOrEmpty(r.Container))
-                        .GroupBy(r => r.Container)
-                        .Where(g => g.Any())
-                        .ToList();
-                }
+    @if (Model?.Records != null && Model.Records.Any())
+    {
+        <!-- Container Grouped Table Structure -->
+        <div class="container-tables">
+            @{
+                // Group records by container - only show containers that have records
+                var groupedByContainer = Model.Records
+                    .Where(r => !string.IsNullOrEmpty(r.Container))
+                    .GroupBy(r => r.Container)
+                    .Where(g => g.Any())
+                    .ToList();
+            }
+            
+            @foreach (var containerGroup in groupedByContainer)
+            {
+                var containerId = containerGroup.Key.Replace(" ", "_").Replace("/", "_");
+                var recordCount = containerGroup.Count();
                 
-                @foreach (var containerGroup in groupedByContainer)
-                {
-                    var containerId = containerGroup.Key.Replace(" ", "_").Replace("/", "_");
-                    var recordCount = containerGroup.Count();
-                    
-                    <!-- Container Header -->
+                <!-- Container Header -->
+                <div class="container-section">
                     <div class="container-header" data-container="@containerGroup.Key">
-                        <div class="d-flex align-items-center py-2 px-3 border-bottom bg-light">
+                        <div class="d-flex align-items-center py-2 px-3 bg-light border rounded-top">
                             <input type="checkbox" class="form-check-input container-checkbox me-3" 
                                    id="container_@containerId" 
                                    data-container="@containerGroup.Key"
@@ -71,60 +71,162 @@
                             <i class="fas fa-folder me-2 text-primary"></i>
                             <span class="fw-semibold">@containerGroup.Key</span>
                             <span class="badge bg-secondary ms-2">@recordCount records</span>
+                            
+                            <!-- Global select all in first container header -->
+                            @if (containerGroup == groupedByContainer.First())
+                            {
+                                <div class="ms-auto">
+                                    <label class="form-check-label me-2">
+                                        <input type="checkbox" class="form-check-input me-1" id="selectAll" title="Select all records">
+                                        Select All
+                                    </label>
+                                </div>
+                            }
                         </div>
                         
-                        <!-- Container Records -->
+                        <!-- Container Table -->
                         <div class="collapse show" id="collapse_@containerId">
                             <div class="table-responsive">
-                                <table class="table table-hover table-sm mb-0 container-table">
+                                <table class="table table-hover mb-0 container-table">
                                     <thead class="table-light">
                                         <tr>
-                                            <th style="width: 5%;"></th>
-                                            <th style="width: 12%; min-width: 100px;">Client ID</th>
-                                            <th style="width: 25%; min-width: 180px;">Title</th>
-                                            <th style="width: 12%; min-width: 80px;">Country</th>
-                                            <th style="width: 12%; min-width: 80px;">Region</th>
-                                            <th style="width: 17%; min-width: 120px;">Bill To</th>
-                                            <th style="width: 17%; min-width: 120px;">Ship To</th>
+                                            <th style="width: 50px;">Select</th>
+                                            <th style="width: 120px;">Client ID</th>
+                                            <th style="width: 200px;">Title</th>
+                                            <th style="width: 100px;">Country</th>
+                                            <th style="width: 100px;">Region</th>
+                                            <th style="width: 150px;">Bill To</th>
+                                            <th style="width: 150px;">Ship To</th>
+                                            <th style="width: 160px;">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         @foreach (var record in containerGroup)
                                         {
                                             <tr class="record-row" data-uri="@record.URI" data-container="@containerGroup.Key">
-                                                <td class="text-center">
+                                                <td>
                                                     <input type="checkbox" class="form-check-input record-checkbox" 
                                                            value="@record.URI" 
                                                            data-client-id="@(record.ClientId ?? "")"
                                                            data-title="@(record.Title ?? "")"
                                                            data-container="@containerGroup.Key">
-                                                    <input type="hidden" class="record-uri" value="@record.URI">
                                                 </td>
-                                                <td class="text-nowrap">
-                                                    <span class="fw-semibold">@(record.ClientId ?? "N/A")</span>
-                                                </td>
-                                                <td class="text-wrap">
-                                                    <div class="fw-semibold">@(record.Title ?? "N/A")</div>
-                                                    @if (!string.IsNullOrEmpty(record.AllParts))
+                                                <td>
+                                                    @if (!string.IsNullOrEmpty(record.ClientId) && record.ClientId != "N/A")
                                                     {
-                                                        <small class="text-muted d-block">@record.AllParts</small>
+                                                        <a href="@Url.Action("ViewFile", "Search", new { id = record.URI })" 
+                                                           target="_blank" 
+                                                           class="client-id-link" 
+                                                           title="Click to view file in new tab">
+                                                            <div class="client-id-cell">@record.ClientId</div>
+                                                        </a>
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="client-id-cell text-muted">N/A</div>
                                                     }
                                                 </td>
-                                                <td class="text-nowrap">
-                                                    <span>@(record.Country ?? "N/A")</span>
+                                                <td>
+                                                    <div class="title-cell" title="@(record.Title ?? "")">
+                                                        @(record.Title ?? "N/A")
+                                                        @if (!string.IsNullOrEmpty(record.AllParts))
+                                                        {
+                                                            <br><small class="text-muted">@record.AllParts</small>
+                                                        }
+                                                    </div>
                                                 </td>
-                                                <td class="text-nowrap">
-                                                    <span>@(record.Region ?? "N/A")</span>
-                                                </td>
-                                                <td class="text-wrap" style="max-width: 120px;">
-                                                    <span title="@(record.BillTo ?? "")">
+                                                <td>@(record.Country ?? "N/A")</td>
+                                                <td>@(record.Region ?? "N/A")</td>
+                                                <td>
+                                                    <div class="truncate-text" title="@(record.BillTo ?? "")">
                                                         @(record.BillTo ?? "N/A")
-                                                    </span>
+                                                    </div>
                                                 </td>
-                                                <td class="text-wrap" style="max-width: 120px;">
-                                                    <span title="@(record.ShipTo ?? "")">
+                                                <td>
+                                                    <div class="truncate-text" title="@(record.ShipTo ?? "")">
                                                         @(record.ShipTo ?? "N/A")
-                                                    </span>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <div class="ai-actions-container" data-uri="@record.URI">
+                                                        <button type="button" class="btn btn-sm btn-primary ai-toggle-btn" data-uri="@record.URI">
+                                                            <i class="fas fa-robot"></i>
+                                                            AI
+                                                            <i class="fas fa-chevron-down toggle-icon"></i>
+                                                        </button>
+                                                        
+                                                        <!-- Inline AI buttons (initially hidden) -->
+                                                        <div class="ai-buttons-inline" data-uri="@record.URI" style="display: none;">
+                                                            <button type="button" class="btn btn-sm ai-summary-btn summary-option" data-uri="@record.URI" title="Get AI Summary">
+                                                                <i class="fas fa-brain"></i>
+                                                                Summary
+                                                            </button>
+                                                            <button type="button" class="btn btn-sm ai-ask-btn ask-ai-option" data-uri="@record.URI" title="Ask AI Questions">
+                                                                <i class="fas fa-comments"></i>
+                                                                Ask AI
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            <!-- AI Content Row (Initially Hidden) -->
+                                            <tr class="ai-content-row" data-uri="@record.URI" style="display: none;">
+                                                <td colspan="8" class="p-0">
+                                                    <div class="ai-content-container">
+                                                        <div class="ai-content-header">
+                                                            <div class="d-flex justify-content-between align-items-center">
+                                                                <h6 class="mb-0 text-primary">
+                                                                    <i class="fas fa-robot me-2"></i>
+                                                                    AI Analytics for @(record.ClientId ?? "Document")
+                                                                </h6>
+                                                                <button type="button" class="btn btn-sm btn-outline-secondary close-ai-content">
+                                                                    <i class="fas fa-times"></i>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                        <div class="ai-content-body">
+                                                            <!-- Summary Content -->
+                                                            <div class="summary-content" style="display: none;">
+                                                                <h6 class="text-primary mb-3">
+                                                                    <i class="fas fa-brain me-2"></i>
+                                                                    Document Summary
+                                                                </h6>
+                                                                <div class="summary-loading text-center py-3">
+                                                                    <i class="fas fa-spinner fa-spin"></i>
+                                                                    Generating summary...
+                                                                </div>
+                                                                <div class="summary-text-container">
+                                                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                                                        <h6 class="text-muted mb-0">Summary:</h6>
+                                                                        <button type="button" class="btn btn-sm btn-outline-primary read-summary-btn" 
+                                                                                style="display: none;" title="Read summary aloud">
+                                                                            <i class="fas fa-volume-up me-1"></i>
+                                                                            <span class="btn-text">Read</span>
+                                                                        </button>
+                                                                    </div>
+                                                                    <div class="summary-text"></div>
+                                                                </div>
+                                                            </div>
+                                                            
+                                                            <!-- Ask AI Content -->
+                                                            <div class="ask-ai-content" style="display: none;">
+                                                                <h6 class="text-primary mb-3">
+                                                                    <i class="fas fa-robot me-2"></i>
+                                                                    Ask AI about Document
+                                                                </h6>
+                                                                <div class="search-input-group mb-3">
+                                                                    <div class="input-group">
+                                                                        <input type="text" class="ask-ai-input form-control" placeholder="Ask a question about this document..." />
+                                                                        <button type="button" class="ask-ai-submit btn btn-primary">
+                                                                            <i class="fas fa-paper-plane"></i>
+                                                                            Ask
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="ask-ai-response" style="display: none;"></div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         }
@@ -133,123 +235,84 @@
                             </div>
                         </div>
                     </div>
-                }
-            </div>
-        }
-        else
-        {
-            <!-- No Results -->
-            <div class="text-center py-5">
-                <i class="fas fa-search text-muted mb-3" style="font-size: 3rem; opacity: 0.3;"></i>
-                <h6 class="text-muted">No Results Found</h6>
-                <p class="text-muted mb-0">Try adjusting your search criteria</p>
-            </div>
-        }
-    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <!-- No Results -->
+        <div class="text-center py-5">
+            <i class="fas fa-search text-muted mb-3" style="font-size: 3rem; opacity: 0.3;"></i>
+            <h6 class="text-muted">No Results Found</h6>
+            <p class="text-muted mb-0">Try adjusting your search criteria</p>
+        </div>
+    }
 </div>
 
+
 <style>
-    .table-responsive {
+    /* Container Tables Styling */
+    .container-tables {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .container-section {
         border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-
-    .table {
-        table-layout: fixed;
-        width: 100%;
-        margin-bottom: 0;
-    }
-
-    .table td, .table th {
-        vertical-align: middle;
-        padding: 0.75rem 0.5rem;
+        overflow: hidden;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         border: 1px solid #dee2e6;
-    }
-
-    .table th {
-        font-weight: 600;
-        background-color: #f8f9fa;
-        border-bottom: 2px solid #dee2e6;
-    }
-
-    .text-wrap {
-        white-space: normal;
-        word-wrap: break-word;
-        overflow-wrap: break-word;
-        line-height: 1.3;
-    }
-
-    .text-nowrap {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .pagination {
-        margin-top: 20px;
-        margin-bottom: 20px;
-    }
-
-    .page-link {
-        color: #007bff;
-        border-color: #dee2e6;
-    }
-
-    .page-item.active .page-link {
-        background-color: #007bff;
-        border-color: #007bff;
-    }
-
-    .page-item.disabled .page-link {
-        color: #6c757d;
-        pointer-events: none;
-        cursor: not-allowed;
-        background-color: #fff;
-        border-color: #dee2e6;
-    }
-
-    /* Ensure proper column spacing */
-    .table td:nth-child(7), 
-    .table td:nth-child(8) {
-        max-width: 120px;
-        min-width: 100px;
-    }
-
-    .table th:nth-child(7), 
-    .table th:nth-child(8) {
-        max-width: 120px;
-        min-width: 100px;
-    }
-
-    /* Checkbox styling */
-    .form-check-input {
-        width: 1.2em;
-        height: 1.2em;
-        cursor: pointer;
-    }
-
-    .record-row:hover {
-        background-color: #f8f9fa;
-    }
-
-    .record-row.selected {
-        background-color: #e3f2fd;
-    }
-
-    /* Container Tree Styling */
-    .container-tree {
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 0;
     }
 
     .container-header {
-        border: 1px solid #dee2e6;
-        margin-bottom: 1px;
+        background: white;
     }
 
-    .container-header:last-child {
-        margin-bottom: 0;
+    .container-header.selected {
+        background-color: #e3f2fd !important;
+    }
+
+    .container-table {
+        margin: 0;
+        border-top: none;
+        overflow: visible; /* Allow dropdowns to extend beyond table boundaries */
+    }
+    
+    /* Ensure table wrapper allows overflow */
+    .table-responsive {
+        overflow: visible !important;
+    }
+
+    .container-table thead th {
+        background-color: #f8f9fa;
+        border-bottom: 2px solid #dee2e6;
+        font-weight: 600;
+        font-size: 0.875rem;
+        color: #495057;
+        padding: 0.75rem 0.5rem;
+        vertical-align: middle;
+        border-top: 1px solid #dee2e6;
+    }
+
+    .container-table tbody td {
+        padding: 0.75rem 0.5rem;
+        font-size: 0.875rem;
+        vertical-align: middle;
+        border-bottom: 1px solid #f0f0f0;
+        position: relative; /* Create positioning context for dropdowns */
+        overflow: visible; /* Allow dropdowns to overflow the cell */
+    }
+    
+    /* Ensure Actions column has enough space and proper overflow */
+    .container-table tbody td:last-child {
+        overflow: visible;
+        position: relative;
+        min-width: 160px;
+        padding: 0.75rem 1rem; /* More padding for better button spacing */
+        vertical-align: top; /* Align to top when expanded */
     }
 
     .collapse-toggle {
@@ -267,28 +330,65 @@
         transform: rotate(-90deg);
     }
 
-    .container-table {
-        border-top: none;
-    }
-
-    .container-table thead th {
-        background-color: #f8f9fa;
-        border-top: 1px solid #dee2e6;
-        font-size: 0.85rem;
-        padding: 0.5rem;
-    }
-
-    .container-table tbody td {
-        padding: 0.6rem 0.5rem;
-        font-size: 0.9rem;
-    }
-
     .container-checkbox {
         transform: scale(1.1);
     }
 
-    .container-header.selected {
-        background-color: #e3f2fd !important;
+    .record-row {
+        transition: all 0.2s ease;
+    }
+
+    .record-row:hover {
+        background-color: #f8f9fa;
+    }
+
+    .record-row.selected {
+        background-color: #e3f2fd;
+        border-left: 3px solid #2196f3;
+    }
+
+    .client-id-cell {
+        font-weight: 600;
+        color: #1e293b;
+    }
+
+    .client-id-link {
+        text-decoration: none;
+        color: inherit;
+        transition: all 0.2s ease;
+    }
+
+    .client-id-link:hover {
+        text-decoration: none;
+        color: inherit;
+    }
+
+    .client-id-link:hover .client-id-cell {
+        background-color: #e3f2fd;
+        color: #1976d2;
+        border-radius: 4px;
+        padding: 2px 6px;
+        cursor: pointer;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .client-id-link .client-id-cell {
+        transition: all 0.2s ease;
+        display: inline-block;
+    }
+
+    .title-cell {
+        max-width: 200px;
+        word-wrap: break-word;
+        line-height: 1.4;
+    }
+
+    .truncate-text {
+        max-width: 150px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     /* Selected records indicator */
@@ -298,18 +398,509 @@
         z-index: 100;
         background: #007bff;
         color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 0 0 8px 8px;
-        margin-bottom: 1rem;
+        padding: 0.75rem 1rem;
+        margin: 0;
         display: none;
         text-align: center;
         font-weight: 600;
+        border-bottom: 1px solid #0056b3;
+    }
+
+    /* AI Actions Container - Inline button approach */
+    .ai-actions-container {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        align-items: stretch;
+        width: 100%;
+    }
+
+    .ai-toggle-btn {
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 0.375rem;
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.25rem;
+        padding: 0.375rem 0.5rem;
+        width: 100%;
+    }
+
+    .ai-toggle-btn:hover {
+        background: #2563eb;
+        transform: translateY(-1px);
+    }
+
+    .ai-toggle-btn.expanded {
+        background: #1d4ed8;
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+
+    .ai-toggle-btn .toggle-icon {
+        transition: transform 0.2s ease;
+    }
+
+    .ai-toggle-btn.expanded .toggle-icon {
+        transform: rotate(180deg);
+    }
+
+    .ai-buttons-inline {
+        display: flex;
+        flex-direction: column;
+        gap: 0.125rem;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-top: none;
+        border-radius: 0 0 0.375rem 0.375rem;
+        padding: 0.25rem;
+        animation: slideDown 0.2s ease-out;
+    }
+
+    .ai-buttons-inline .btn {
+        font-size: 0.65rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-weight: 500;
+        transition: all 0.15s ease;
+        text-align: center;
+    }
+
+    .ai-buttons-inline .btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    /* Professional AI button colors */
+    .ai-summary-btn {
+        background-color: #6366f1; /* Professional indigo */
+        border-color: #6366f1;
+        color: white;
+    }
+
+    .ai-summary-btn:hover {
+        background-color: #5855eb;
+        border-color: #5855eb;
+        color: white;
+    }
+
+    .ai-ask-btn {
+        background-color: #64748b; /* Professional slate gray */
+        border-color: #64748b;
+        color: white;
+    }
+
+    .ai-ask-btn:hover {
+        background-color: #475569;
+        border-color: #475569;
+        color: white;
+    }
+
+    @@keyframes slideDown {
+        from {
+            opacity: 0;
+            transform: translateY(-5px);
+            max-height: 0;
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+            max-height: 100px;
+        }
+    }
+
+
+    /* Responsive Design */
+    @@media (max-width: 768px) {
+        #results-table th,
+        #results-table td {
+            padding: 0.5rem 0.25rem;
+            font-size: 0.75rem;
+        }
+        
+        .truncate-text {
+            max-width: 100px;
+        }
+        
+        .title-cell {
+            max-width: 150px;
+        }
+        
+        .analytics-btn {
+            font-size: 0.625rem;
+            padding: 0.25rem 0.375rem;
+        }
+    }
+
+    /* Sticky table header */
+    .sticky-top {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+
+    /* Inline AI Content Styling */
+    .ai-content-row {
+        background-color: #f8f9fa;
+        border-left: 4px solid #3b82f6;
+    }
+
+    .ai-content-container {
+        margin: 0;
+        border-radius: 0;
+        background: white;
+        border: 1px solid #e2e8f0;
+        margin: 0.5rem;
+    }
+
+    .ai-content-header {
+        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .ai-content-body {
+        padding: 1rem;
+    }
+
+    .close-ai-content {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+    }
+
+    .ai-content-row .summary-text {
+        font-size: 0.875rem;
+        line-height: 1.6;
+        color: #1e293b;
+        padding: 0.75rem;
+        background: #f8fafc;
+        border-radius: 0.375rem;
+        border-left: 3px solid #3b82f6;
+        margin-top: 0.5rem;
+    }
+
+    .ai-content-row .ask-ai-response {
+        padding: 0.75rem;
+        background: #f8fafc;
+        border-radius: 0.375rem;
+        border-left: 3px solid #10b981;
+        font-size: 0.875rem;
+        line-height: 1.6;
+        margin-top: 0.5rem;
+    }
+
+    .ai-content-row .summary-loading {
+        color: #6c757d;
+        font-size: 0.875rem;
+    }
+
+    /* Animation for expanding AI content */
+    .ai-content-row {
+        transition: none; /* Let anime.js handle animations */
+    }
+    
+    .ai-content-row[style*="display: none"] {
+        opacity: 0;
+        transform: translateY(-20px) scale(0.95);
+    }
+
+    .ai-content-row.animating {
+        pointer-events: none; /* Prevent interaction during animation */
+    }
+    
+    /* Ensure AI buttons remain clickable even during animations */
+    .analytics-btn, .analytics-dropdown {
+        pointer-events: auto !important;
+        position: relative;
+        z-index: 1001;
+    }
+
+    /* Improved styling for smoother animations */
+    .ai-content-container {
+        transform-origin: top center;
+        will-change: transform, opacity;
+        opacity: 0.7; /* Start slightly faded */
+    }
+    
+    /* Visible test element for animation verification */
+    .animation-test {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #3b82f6;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        z-index: 9999;
+        font-size: 12px;
+    }
+
+    /* Text-to-Speech button styling */
+    .read-summary-btn {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        transition: all 0.3s ease;
+    }
+
+    .read-summary-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    /* Reading pulse animation */
+    .reading-pulse {
+        animation: readingPulse 1.5s infinite;
+    }
+
+    @@keyframes readingPulse {
+        0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4);
+        }
+        50% {
+            transform: scale(1.05);
+            box-shadow: 0 0 0 8px rgba(220, 53, 69, 0.1);
+        }
+    }
+
+    /* Summary text container styling */
+    .summary-text-container {
+        position: relative;
     }
 </style>
 
+<!-- Anime.js CDN with multiple fallbacks for smooth animations -->
+<script src="https://cdn.jsdelivr.net/npm/animejs@3.2.1/lib/anime.min.js" 
+        onerror="this.onerror=null; this.src='https://unpkg.com/animejs@3.2.1/lib/anime.min.js';" 
+        onload="console.log('Anime.js loaded from CDN')"></script>
+
 <script>
+// Ensure the script only runs once to prevent duplicate event handlers
+if (!window.searchResultsInitialized) {
+    window.searchResultsInitialized = true;
+    
 $(document).ready(function() {
-    // Handle "Select All" checkbox (if exists)
+    
+    // Test if Anime.js is loaded properly
+    if (typeof anime !== 'undefined') {
+        // Anime.js is available for animations
+    } else {
+        console.error('❌ Anime.js failed to load! Falling back to CSS + jQuery animations.');
+        
+        // Add CSS-based animations as fallback
+        $('head').append(`
+            <style id="fallback-animations">
+                .ai-content-row.show-animated {
+                    animation: aiContentExpand 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+                }
+                .ai-content-row.hide-animated {
+                    animation: aiContentCollapse 0.4s ease-in forwards;
+                }
+                
+                @@keyframes aiContentExpand {
+                    from {
+                        opacity: 0;
+                        transform: translateY(-20px) scale(0.95);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateY(0) scale(1);
+                    }
+                }
+                
+                @@keyframes aiContentCollapse {
+                    from {
+                        opacity: 1;
+                        transform: translateY(0) scale(1);
+                    }
+                    to {
+                        opacity: 0;
+                        transform: translateY(-15px) scale(0.95);
+                    }
+                }
+                
+                .animation-test-fallback {
+                    animation: testSlideIn 1s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+                }
+                
+                @@keyframes testSlideIn {
+                    from {
+                        opacity: 0;
+                        transform: translateX(300px) scale(0.5);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateX(0) scale(1);
+                    }
+                }
+            </style>
+        `);
+        
+    }
+
+    // Enhanced animation functions using Anime.js
+    function showAIContentWithAnimation($aiContentRow, callback) {
+        // Debug: Check if anime.js is loaded
+        if (typeof anime === 'undefined') {
+            console.warn('Anime.js not loaded, using CSS animations');
+            
+            // Use CSS animation fallback
+            $aiContentRow.css({
+                'display': 'table-row',
+                'opacity': '0',
+                'transform': 'translateY(-20px) scale(0.95)'
+            }).addClass('show-animated');
+            
+            // Wait for animation to complete
+            setTimeout(function() {
+                $aiContentRow.removeClass('show-animated');
+                if (callback) callback();
+            }, 600);
+            return;
+        }
+        
+        console.log('Starting AI content animation for:', $aiContentRow);
+        
+        // Reset initial state and ensure visibility
+        $aiContentRow.css({
+            'display': 'table-row',
+            'opacity': '0',
+            'transform': 'translateY(-20px) scale(0.95)'
+        }).addClass('animating');
+        
+        // Animate the AI content expansion with spring effect
+        anime({
+            targets: $aiContentRow[0],
+            opacity: [0, 1],
+            translateY: [-20, 0],
+            scale: [0.95, 1],
+            duration: 800,
+            easing: 'easeOutElastic(1, .6)',
+            begin: function() {
+                console.log('Animation started');
+            },
+            complete: function() {
+                console.log('Animation completed');
+                $aiContentRow.removeClass('animating');
+                if (callback) callback();
+                
+                // Additional safeguard: ensure animating class is removed after a short delay
+                setTimeout(function() {
+                    $aiContentRow.removeClass('animating');
+                }, 100);
+            }
+        });
+        
+        // Animate the container content with slight delay for a staggered effect
+        const containerElement = $aiContentRow.find('.ai-content-container')[0];
+        if (containerElement) {
+            anime({
+                targets: containerElement,
+                translateY: [15, 0],
+                opacity: [0.7, 1],
+                duration: 500,
+                delay: 300,
+                easing: 'easeOutExpo'
+            });
+        }
+    }
+    
+    function hideAIContentWithAnimation($aiContentRow, callback) {
+        // Debug: Check if anime.js is loaded
+        if (typeof anime === 'undefined') {
+            console.warn('Anime.js not loaded, using CSS animations');
+            
+            // Use CSS animation fallback
+            $aiContentRow.addClass('hide-animated');
+            
+            // Wait for animation to complete then hide
+            setTimeout(function() {
+                $aiContentRow.hide().removeClass('hide-animated');
+                $aiContentRow.css('transform', ''); // Reset transform
+                if (callback) callback();
+            }, 400);
+            return;
+        }
+        
+        console.log('Starting AI content hide animation for:', $aiContentRow);
+        $aiContentRow.addClass('animating');
+        
+        // Animate the AI content collapse
+        anime({
+            targets: $aiContentRow[0],
+            opacity: [1, 0],
+            translateY: [0, -15],
+            scale: [1, 0.95],
+            duration: 400,
+            easing: 'easeInExpo',
+            complete: function() {
+                console.log('Hide animation completed');
+                $aiContentRow.hide().removeClass('animating');
+                // Reset transform for next animation
+                $aiContentRow.css('transform', '');
+                if (callback) callback();
+            }
+        });
+    }
+    
+    function animateTypewriter(text, element, options = {}) {
+        const {
+            speed = 25,
+            onComplete = null,
+            showCursor = true
+        } = options;
+        
+        element.html('');
+        
+        if (showCursor) {
+            element.append('<span class="typewriter-cursor">|</span>');
+        }
+        
+        let i = 0;
+        const typeInterval = setInterval(() => {
+            if (i < text.length) {
+                if (showCursor) {
+                    element.html(text.substring(0, i + 1) + '<span class="typewriter-cursor">|</span>');
+                } else {
+                    element.html(text.substring(0, i + 1));
+                }
+                i++;
+            } else {
+                clearInterval(typeInterval);
+                if (showCursor) {
+                    // Remove cursor after typing is complete
+                    setTimeout(() => {
+                        element.find('.typewriter-cursor').remove();
+                    }, 1000);
+                }
+                if (onComplete) onComplete();
+            }
+        }, speed);
+        
+        // Add CSS for blinking cursor
+        if (showCursor && !$('head').find('#typewriter-css').length) {
+            $('head').append(`
+                <style id="typewriter-css">
+                    .typewriter-cursor {
+                        animation: blink 1s infinite;
+                        color: #3b82f6;
+                        font-weight: bold;
+                    }
+                    @@keyframes blink {
+                        0%, 50% { opacity: 1; }
+                        51%, 100% { opacity: 0; }
+                    }
+                </style>
+            `);
+        }
+    }
+    // Handle "Select All" checkbox
     $('#selectAll').on('change', function() {
         const isChecked = $(this).prop('checked');
         $('.record-checkbox, .container-checkbox').prop('checked', isChecked);
@@ -342,7 +933,8 @@ $(document).ready(function() {
     // Handle individual record checkboxes
     $(document).on('change', '.record-checkbox', function() {
         const $row = $(this).closest('.record-row');
-        const $containerHeader = $(this).closest('.container-header');
+        const $containerSection = $(this).closest('.container-section');
+        const $containerHeader = $containerSection.find('.container-header');
         const containerName = $(this).data('container');
         
         if ($(this).prop('checked')) {
@@ -352,8 +944,8 @@ $(document).ready(function() {
         }
         
         // Check if all records in this container are selected
-        const containerRecords = $containerHeader.find('.record-checkbox');
-        const selectedInContainer = $containerHeader.find('.record-checkbox:checked');
+        const containerRecords = $containerSection.find('.record-checkbox');
+        const selectedInContainer = $containerSection.find('.record-checkbox:checked');
         const containerCheckbox = $containerHeader.find('.container-checkbox');
         
         if (selectedInContainer.length === containerRecords.length && containerRecords.length > 0) {
@@ -432,8 +1024,11 @@ $(document).ready(function() {
             
             $('.selected-count').show().html(`
                 ${displayText}
-                <button class="btn btn-sm btn-light ms-3" onclick="getSelectedRecords()">
-                    <i class="fas fa-list me-1"></i>Get Selected
+                <button class="btn btn-sm btn-success ms-3" onclick="exportToCSV()">
+                    <i class="fas fa-file-csv me-1"></i>Export CSV
+                </button>
+                <button class="btn btn-sm btn-primary ms-2" onclick="downloadSelected()">
+                    <i class="fas fa-download me-1"></i>Download Files
                 </button>
                 <button class="btn btn-sm btn-outline-light ms-2" onclick="clearSelection()">
                     <i class="fas fa-times me-1"></i>Clear
@@ -470,7 +1065,621 @@ $(document).ready(function() {
         $('.record-row, .container-header').removeClass('selected');
         updateSelectedCount();
     };
+
+    // Global function to export selected records to CSV
+    window.exportToCSV = function() {
+        const selectedRecords = [];
+        $('.record-checkbox:checked').each(function() {
+            const $checkbox = $(this);
+            const $row = $checkbox.closest('.record-row');
+            
+            // Extract data from the table row structure
+            const clientId = $row.find('.client-id-cell').text().trim() || '';
+            const title = $row.find('.title-cell').text().trim().split('\n')[0] || ''; // Get only the title, not the AllParts
+            const country = $row.find('td:nth-child(4)').text().trim() || ''; // Country column
+            const region = $row.find('td:nth-child(5)').text().trim() || ''; // Region column
+            const billTo = $row.find('td:nth-child(6) .truncate-text').text().trim() || ''; // Bill To column
+            const shipTo = $row.find('td:nth-child(7) .truncate-text').text().trim() || ''; // Ship To column
+            const container = $checkbox.data('container') || '';
+            
+            // Debug: log the extracted data for the first few records
+            if (selectedRecords.length < 3) {
+                console.log(`Record ${selectedRecords.length + 1}:`, {
+                    clientId: clientId,
+                    title: title,
+                    country: country,
+                    region: region,
+                    billTo: billTo,
+                    shipTo: shipTo,
+                    container: container
+                });
+            }
+            
+            selectedRecords.push({
+                uri: $checkbox.val(),
+                clientId: clientId,
+                title: title,
+                container: container,
+                country: country,
+                region: region,
+                billTo: billTo,
+                shipTo: shipTo
+            });
+        });
+
+        console.log('Selected records for export:', selectedRecords);
+        
+        if (selectedRecords.length === 0) {
+            alert('Please select records to export.');
+            return;
+        }
+
+        // Generate CSV content
+        let csvContent = "Client ID,Title,Container,Country,Region,Bill To,Ship To\n";
+        selectedRecords.forEach(record => {
+            const row = [
+                record.clientId || '',
+                record.title || '',
+                record.container || '',
+                record.country || '',
+                record.region || '',
+                record.billTo || '',
+                record.shipTo || ''
+            ].map(field => {
+                // Ensure field is a string and handle null/undefined
+                const fieldStr = (field == null || field === undefined) ? '' : String(field).trim();
+                return `"${fieldStr.replace(/"/g, '""')}"`;
+            }).join(',');
+            csvContent += row + '\n';
+        });
+        
+        // Generate filename and download CSV directly
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
+        const fileName = `search_export_${timestamp}.csv`;
+        
+        // Create blob and download link
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        
+        if (link.download !== undefined) {
+            // Create download link and trigger download
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', fileName);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            alert(`✅ CSV Export Successful!\n\nFile: ${fileName}\nRecords exported: ${selectedRecords.length}\n\nCheck your Downloads folder.`);
+        } else {
+            alert('❌ CSV download not supported in this browser.');
+        }
+    };
+
+    // Global function to download selected files
+    window.downloadSelected = function() {
+        const selectedURIs = [];
+        $('.record-checkbox:checked').each(function() {
+            selectedURIs.push($(this).val());
+        });
+
+        console.log('Selected URIs for download:', selectedURIs);
+
+        if (selectedURIs.length === 0) {
+            alert('Please select records to download.');
+            return;
+        }
+
+        // Show appropriate confirmation message
+        const confirmMessage = selectedURIs.length === 1 
+            ? `Download the selected file? It will be downloaded to your default downloads folder.`
+            : `Download ${selectedURIs.length} selected files as ZIP? Files will be downloaded to your default downloads folder.`;
+            
+        if (confirm(confirmMessage)) {
+            // Show loading indicator
+            const $downloadBtn = $('button[onclick="downloadSelected()"]');
+            const originalText = $downloadBtn.html();
+            $downloadBtn.html('<i class="fas fa-spinner fa-spin me-1"></i>Preparing...');
+            $downloadBtn.prop('disabled', true);
+            
+            // Send AJAX request to download files
+            $.ajax({
+                url: '/Search/DownloadSelected',
+                type: 'POST',
+                data: {
+                    selectedIds: selectedURIs
+                },
+                xhrFields: {
+                    responseType: 'blob' // Important for binary data
+                },
+                success: function(blob, status, xhr) {
+                    // Create download link from blob
+                    const url = window.URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    
+                    // Get filename from response headers or use default
+                    const disposition = xhr.getResponseHeader('Content-Disposition');
+                    let filename = 'SelectedFiles.zip';
+                    if (disposition && disposition.includes('filename=')) {
+                        filename = disposition.split('filename=')[1].replace(/"/g, '');
+                    }
+                    
+                    link.href = url;
+                    link.download = filename;
+                    link.style.display = 'none';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    // Clean up the blob URL
+                    window.URL.revokeObjectURL(url);
+                    
+                    const successMessage = selectedURIs.length === 1
+                        ? `✅ Download started!\n\nFile: ${filename}\n\nCheck your Downloads folder.`
+                        : `✅ Download started!\n\nFile: ${filename}\nFiles included: ${selectedURIs.length}\n\nCheck your Downloads folder.`;
+                    
+                    alert(successMessage);
+                },
+                error: function(xhr, status, error) {
+                    console.error('Download error:', error);
+                    let errorMessage = 'Download failed. Please try again.';
+                    
+                    if (xhr.responseJSON && xhr.responseJSON.message) {
+                        errorMessage = xhr.responseJSON.message;
+                    }
+                    
+                    alert(`❌ ${errorMessage}`);
+                },
+                complete: function() {
+                    // Reset button state
+                    $downloadBtn.html(originalText);
+                    $downloadBtn.prop('disabled', false);
+                }
+            });
+        }
+    };
+
+    // AI Actions Functions - Updated for inline button expansion
+    
+    // Toggle AI buttons inline expansion
+    $(document).on('click', '.ai-toggle-btn', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        var $toggleBtn = $(this);
+        var $container = $toggleBtn.closest('.ai-actions-container');
+        var $inlineButtons = $container.find('.ai-buttons-inline');
+        var uri = $toggleBtn.data('uri');
+        
+        // Close all other expanded AI button containers
+        $('.ai-toggle-btn.expanded').not($toggleBtn).each(function() {
+            $(this).removeClass('expanded');
+            $(this).closest('.ai-actions-container').find('.ai-buttons-inline').slideUp(200);
+        });
+        
+        // Toggle current container
+        if ($toggleBtn.hasClass('expanded')) {
+            // Collapse
+            $toggleBtn.removeClass('expanded');
+            $inlineButtons.slideUp(200);
+        } else {
+            // Expand
+            $toggleBtn.addClass('expanded');
+            $inlineButtons.slideDown(200);
+        }
+    });
+
+    // Close expanded AI buttons when clicking outside
+    $(document).on('click', function(e) {
+        if (!$(e.target).closest('.ai-actions-container').length) {
+            $('.ai-toggle-btn.expanded').removeClass('expanded');
+            $('.ai-buttons-inline').slideUp(200);
+        }
+    });
+    
+    // Prevent AI buttons from closing when clicking inside the inline buttons
+    $(document).on('click', '.ai-buttons-inline', function(e) {
+        e.stopPropagation();
+    });
+
+    // Track active requests to prevent duplicates
+    var activeSummaryRequests = {};
+    
+    // Unbind any existing handlers first to prevent multiple bindings
+    $(document).off('click', '.summary-option');
+    
+    // Handle Get Summary option - Shows inline within table row with enhanced animations
+    $(document).on('click.summaryHandler', '.summary-option', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        var uri = $(this).data('uri');
+        
+        // Prevent multiple concurrent requests for the same URI
+        if (activeSummaryRequests[uri]) {
+            console.log('Summary request already in progress for URI:', uri);
+            return;
+        }
+        
+        // Find the AI content row for this record
+        var $aiContentRow = $(`.ai-content-row[data-uri="${uri}"]`);
+        var $summaryContent = $aiContentRow.find('.summary-content');
+        var $askAiContent = $aiContentRow.find('.ask-ai-content');
+        var $summaryText = $summaryContent.find('.summary-text');
+        
+        // Close other AI content rows with animation
+        $('.ai-content-row').not($aiContentRow).each(function() {
+            if ($(this).is(':visible')) {
+                hideAIContentWithAnimation($(this));
+            }
+        });
+        
+        // Setup content visibility
+        $askAiContent.hide();
+        $summaryContent.show();
+        $summaryText.html('');
+        
+        // Close dropdown
+        $('.analytics-menu').removeClass('show');
+        
+        // Show AI content row with enhanced animation
+        showAIContentWithAnimation($aiContentRow, function() {
+            // Smooth scroll to the AI content row after animation completes
+            $('html, body').animate({
+                scrollTop: $aiContentRow.offset().top - 100
+            }, 400);
+        });
+        
+        // Start enhanced loading animation
+        animateTypewriter('🧠 Analyzing document...', $summaryText, { 
+            speed: 50,
+            showCursor: true 
+        });
+        
+        // Mark request as active
+        activeSummaryRequests[uri] = true;
+        
+        $.ajax({
+            url: '/Search/GetFileSummaryByURI',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ uri: uri }),
+            global: false,
+            success: function(data) {
+                $summaryText.html('');
+                animateTypewriter(data.summary, $summaryText, { 
+                    speed: 20,
+                    showCursor: false,
+                    onComplete: function() {
+                        // Show the read button after summary is fully typed
+                        $aiContentRow.find('.read-summary-btn').fadeIn(300);
+                    }
+                });
+            },
+            error: function(xhr, status, error) {
+                var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : error;
+                $summaryText.html('');
+                animateTypewriter('❌ Error: ' + errorMessage, $summaryText, { 
+                    speed: 30,
+                    showCursor: false 
+                });
+            },
+            complete: function() {
+                // Clear the active request flag
+                delete activeSummaryRequests[uri];
+            }
+        });
+    });
+
+    // Handle Ask AI option - Shows inline within table row with enhanced animations
+    $(document).on('click', '.ask-ai-option', function(e) {
+        e.stopPropagation();
+        var uri = $(this).data('uri');
+        
+        // Find the AI content row for this record
+        var $aiContentRow = $(`.ai-content-row[data-uri="${uri}"]`);
+        var $summaryContent = $aiContentRow.find('.summary-content');
+        var $askAiContent = $aiContentRow.find('.ask-ai-content');
+        
+        // Store URI for later use
+        $aiContentRow.data('current-uri', uri);
+        
+        // Close other AI content rows with animation
+        $('.ai-content-row').not($aiContentRow).each(function() {
+            if ($(this).is(':visible')) {
+                hideAIContentWithAnimation($(this));
+            }
+        });
+        
+        // Setup content visibility
+        $summaryContent.hide();
+        $askAiContent.show();
+        
+        // Clear previous response
+        $askAiContent.find('.ask-ai-response').hide();
+        $askAiContent.find('.ask-ai-input').val('');
+        
+        // Close dropdown
+        $('.analytics-menu').removeClass('show');
+        
+        // Show AI content row with enhanced animation
+        showAIContentWithAnimation($aiContentRow, function() {
+            // Smooth scroll and focus input after animation completes
+            $('html, body').animate({
+                scrollTop: $aiContentRow.offset().top - 100
+            }, 400, function() {
+                // Add subtle animation to the input field to draw attention
+                const inputField = $askAiContent.find('.ask-ai-input')[0];
+                anime({
+                    targets: inputField,
+                    scale: [0.98, 1],
+                    duration: 200,
+                    easing: 'easeOutQuad',
+                    complete: function() {
+                        $askAiContent.find('.ask-ai-input').focus();
+                    }
+                });
+            });
+        });
+    });
+
+    // Track active Ask AI requests to prevent duplicates
+    var activeAskAIRequests = {};
+    
+    // Unbind any existing handlers first to prevent multiple bindings
+    $(document).off('click', '.ask-ai-submit');
+    
+    // Handle Ask AI submit - Works with inline AI content
+    $(document).on('click.askAIHandler', '.ask-ai-submit', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        var $button = $(this);
+        var $aiContentRow = $(this).closest('.ai-content-row');
+        var uri = $aiContentRow.data('current-uri') || $aiContentRow.data('uri');
+        var $askAiContent = $(this).closest('.ask-ai-content');
+        var $input = $askAiContent.find('.ask-ai-input');
+        var $response = $askAiContent.find('.ask-ai-response');
+        var question = $input.val() ? $input.val().trim() : '';
+        
+        console.log('Ask AI clicked. URI:', uri, 'Question:', question);
+        
+        // Enhanced validation
+        if (!question || question.length === 0 || question === '') {
+            alert('Please enter a question.');
+            $input.focus();
+            return;
+        }
+        
+        if (!uri) {
+            alert('Please select a document first by clicking the AI button.');
+            return;
+        }
+        
+        // Prevent multiple concurrent requests for the same URI + question combination
+        var requestKey = uri + '|' + question;
+        if (activeAskAIRequests[requestKey]) {
+            console.log('Ask AI request already in progress for:', requestKey);
+            return;
+        }
+        
+        // Disable button during processing
+        $button.prop('disabled', true);
+        var originalButtonHtml = $button.html();
+        $button.html('<i class="fas fa-spinner fa-spin"></i> Processing...');
+        
+        // Animate response container appearance
+        $response.show();
+        if (typeof anime !== 'undefined') {
+            anime({
+                targets: $response[0],
+                opacity: [0, 1],
+                translateY: [10, 0],
+                duration: 300,
+                easing: 'easeOutQuad'
+            });
+        }
+        
+        $response.html('');
+        animateTypewriter('🤖 Analyzing document to answer your question...', $response, { 
+            speed: 40,
+            showCursor: true 
+        });
+        
+        // Mark request as active
+        activeAskAIRequests[requestKey] = true;
+        
+        $.ajax({
+            url: '/Search/AIAnalyticsByURI',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ 
+                query: question,
+                uri: uri
+            }),
+            global: false,
+            success: function(data) {
+                $response.html('');
+                if (data.answer) {
+                    animateTypewriter(data.answer, $response, { 
+                        speed: 15,
+                        showCursor: false 
+                    });
+                } else {
+                    animateTypewriter('❌ No response received', $response, { 
+                        speed: 30,
+                        showCursor: false 
+                    });
+                }
+                
+                // Keep the question in the input field - don't clear it
+            },
+            error: function(xhr, status, error) {
+                var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : error;
+                $response.html('');
+                animateTypewriter('❌ Error: ' + errorMessage, $response, { 
+                    speed: 30,
+                    showCursor: false 
+                });
+            },
+            complete: function() {
+                // Clear the active request flag and restore button
+                delete activeAskAIRequests[requestKey];
+                $button.prop('disabled', false);
+                $button.html(originalButtonHtml);
+            }
+        });
+    });
+
+    // Handle Enter key for Ask AI input
+    $(document).on('keypress', '.ask-ai-input', function(e) {
+        if (e.which === 13) { // Enter key
+            e.preventDefault();
+            var $submitBtn = $(this).closest('.ask-ai-content').find('.ask-ai-submit');
+            
+            // Only trigger if button is not disabled
+            if (!$submitBtn.prop('disabled')) {
+                $submitBtn.click();
+            }
+        }
+    });
+
+    // Handle close AI content button with smooth animation
+    $(document).on('click', '.close-ai-content', function() {
+        const $aiContentRow = $(this).closest('.ai-content-row');
+        hideAIContentWithAnimation($aiContentRow);
+    });
+
+    // Typewriter effect for analytics (separate from existing functions)
+    function typeWriterForAnalytics(text, element, speed) {
+        if (!text) return;
+        
+        var i = 0;
+        element.html('');
+        
+        function type() {
+            if (i < text.length) {
+                element.append(text.charAt(i));
+                i++;
+                setTimeout(type, speed);
+            }
+        }
+        type();
+    }
+
+    // Text-to-Speech functionality
+    let currentSpeech = null;
+    let isReading = false;
+
+    // Handle read summary button click
+    $(document).on('click', '.read-summary-btn', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const $btn = $(this);
+        const $summaryText = $btn.closest('.ai-content-row').find('.summary-text');
+        const summaryContent = $summaryText.text().trim();
+        
+        if (!summaryContent) {
+            alert('No summary available to read.');
+            return;
+        }
+
+        // Check if browser supports speech synthesis
+        if (!('speechSynthesis' in window)) {
+            alert('Text-to-speech is not supported in your browser.');
+            return;
+        }
+
+        // If currently reading, stop and reset
+        if (isReading && currentSpeech) {
+            window.speechSynthesis.cancel();
+            resetReadButton($btn);
+            return;
+        }
+
+        // Start reading
+        startReading(summaryContent, $btn);
+    });
+
+    function startReading(text, $btn) {
+        // Create speech synthesis utterance
+        currentSpeech = new SpeechSynthesisUtterance(text);
+        
+        // Configure speech settings
+        currentSpeech.rate = 0.9; // Slightly slower than normal
+        currentSpeech.pitch = 1.0;
+        currentSpeech.volume = 0.8;
+        
+        // Try to use a natural voice if available
+        const voices = window.speechSynthesis.getVoices();
+        const preferredVoice = voices.find(voice => 
+            voice.name.includes('Natural') || 
+            voice.name.includes('Enhanced') ||
+            voice.lang.startsWith('en')
+        );
+        if (preferredVoice) {
+            currentSpeech.voice = preferredVoice;
+        }
+
+        // Update button to show "reading" state
+        isReading = true;
+        $btn.removeClass('btn-outline-primary').addClass('btn-danger');
+        $btn.find('.btn-text').text('Stop');
+        $btn.find('i').removeClass('fa-volume-up').addClass('fa-stop');
+        
+        // Add pulse animation to indicate active reading
+        $btn.addClass('reading-pulse');
+
+        // Handle speech events
+        currentSpeech.onstart = function() {
+            console.log('Speech started');
+        };
+
+        currentSpeech.onend = function() {
+            console.log('Speech ended');
+            resetReadButton($btn);
+        };
+
+        currentSpeech.onerror = function(event) {
+            console.error('Speech synthesis error:', event.error);
+            resetReadButton($btn);
+            if (event.error !== 'interrupted') {
+                alert('Error occurred while reading the summary.');
+            }
+        };
+
+        // Start speaking
+        window.speechSynthesis.speak(currentSpeech);
+    }
+
+    function resetReadButton($btn) {
+        isReading = false;
+        currentSpeech = null;
+        
+        // Reset button appearance
+        $btn.removeClass('btn-danger reading-pulse').addClass('btn-outline-primary');
+        $btn.find('.btn-text').text('Read');
+        $btn.find('i').removeClass('fa-stop').addClass('fa-volume-up');
+    }
+
+    // Ensure voices are loaded (some browsers need this)
+    if ('speechSynthesis' in window) {
+        // Load voices
+        window.speechSynthesis.getVoices();
+        
+        // Handle voice loading event
+        window.speechSynthesis.onvoiceschanged = function() {
+            console.log('Speech synthesis voices loaded:', window.speechSynthesis.getVoices().length);
+        };
+    }
+
 });
+
+} // End of initialization check
 </script>
 
 @functions {
@@ -505,6 +1714,7 @@ $(document).ready(function() {
                             "BillTo" => "Bill To",
                             "ShipTo" => "Ship To",
                             "ClientId" => "Client ID",
+                            "ContentSearch" => "Content Search",
                             _ => field
                         };
                         
